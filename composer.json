@@ -1,0 +1,38 @@
+{
+    "name": "sekihin/REST-Api-with-Slim-PHP",
+    "description": "REST API with PHP Slim Framework 4 and MySQL",
+    "version": "0.0.0.1",
+    "type": "project",
+    "license": "Apache 2.0",
+    "authors": [
+        {
+            "name": "Solariis",
+            "email": "sekihin2008@msn.com",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "slim/slim": "4.*",
+        "firebase/php-jwt": "^6.10",
+        "slim/psr7": "^1.6",
+        "selective/basepath": "^2.2",
+        "monolog/monolog": "^3.8",
+        "phpmailer/phpmailer": "^6.9",
+        "slim/http-cache": "^1.2",
+        "vlucas/phpdotenv": "^5.6"
+    },
+    "autoload": {
+        "files": [
+            "src/config/config.php"
+        ],
+        "classmap": [
+            "src/libs"
+        ]
+    },
+    "minimum-stability": "stable",
+    "config": {
+        "preferred-install": "dist",
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}
