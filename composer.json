@@ -1,5 +1,5 @@
 {
-    "name": "sekihin/REST-Api-with-Slim-PHP",
+    "name": "sekihin/rest-api-with-slim-php",
     "description": "REST API with PHP Slim Framework 4 and MySQL",
     "version": "0.0.0.1",
     "type": "project",
@@ -12,21 +12,21 @@
         }
     ],
     "require": {
-        "slim/slim": "4.*",
+        "ext-json": "*",
+        "ext-pdo": "*",
         "firebase/php-jwt": "^6.10",
-        "slim/psr7": "^1.6",
-        "selective/basepath": "^2.2",
         "monolog/monolog": "^3.8",
         "phpmailer/phpmailer": "^6.9",
+        "pimple/pimple": "^3.5",
+        "selective/basepath": "^2.2",
         "slim/http-cache": "^1.2",
+        "slim/psr7": "^1.6",
+        "slim/slim": "4.*",
         "vlucas/phpdotenv": "^5.6"
     },
     "autoload": {
-        "files": [
-            "src/config/config.php"
-        ],
         "classmap": [
-            "src/libs"
+            "src/common"
         ]
     },
     "minimum-stability": "stable",
