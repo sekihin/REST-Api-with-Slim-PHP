@@ -3,7 +3,7 @@
     "description": "REST API with PHP Slim Framework 4 and MySQL",
     "version": "0.0.0.1",
     "type": "project",
-    "license": "Apache 2.0",
+    "license": "MIT",
     "authors": [
         {
             "name": "Solariis",
@@ -22,6 +22,7 @@
         "slim/http-cache": "^1.2",
         "slim/psr7": "^1.6",
         "slim/slim": "4.*",
+        "tuupola/cors-middleware": "^1.4",
         "vlucas/phpdotenv": "^5.6"
     },
     "autoload": {
@@ -29,10 +30,31 @@
             "src/common"
         ]
     },
-    "minimum-stability": "stable",
+    "minimum-stability": "dev",
     "config": {
         "preferred-install": "dist",
         "optimize-autoloader": true,
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "prefer-stable": true,
+    "scripts": {
+        "post-create-project-cmd": [
+            "php -r \"copy('.env.example', '.env');\"",
+            "php post-create-project-command.php"
+        ],
+        "coverage": "phpunit --coverage-text --coverage-html coverage",
+        "crud": "php console api:generate:endpoints",
+        "down": "docker-compose down",
+        "start": "php -S localhost:8080 -t public public/index.php",
+        "test": "phpunit",
+        "up": "docker-compose up -d --build"
+    },
+    "require-dev": {
+        "maurobonfietti/skel-api-slim-php-crud-generator": "^0.22.0",
+        "nunomaduro/phpinsights": "^2.12",
+        "symfony/console": "^7.2"
     }
 }

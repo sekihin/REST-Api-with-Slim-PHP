@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\CustomResponse as Response;
-use Pimple\Psr7\Container;
+use Pimple\Psr11\Container;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
 final class Home
