@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App;
+namespace App\App;
 
 use Slim\Psr7\Response as ResponseBase;
 

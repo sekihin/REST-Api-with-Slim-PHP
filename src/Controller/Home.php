@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\CustomResponse as Response;
+use App\App\CustomResponse as Response;
 use Pimple\Psr11\Container;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 
 final class Home
 {
@@ -23,10 +25,28 @@ final class Home
 
     public function getHelp(Request $request, Response $response): Response
     {
+        $jwtSecret = getenv('SECRET_KEY');
+        if (!$jwtSecret) {
+            return $response->withJson(['error' => 'JWT Secret Key not found'], 500);
+        }
+
+        $payload = [
+            'iss' => 'your_issuer',
+            'iat' => time(),
+            'data' => [
+                'api' => self::API_NAME,
+                'version' => self::API_VERSION,
+                'timestamp' => time()
+            ]
+        ];
+
+        $jwtToken = JWT::encode($payload, $jwtSecret, 'HS256', 'JWT');
+
         $message = [
             'api' => self::API_NAME,
             'version' => self::API_VERSION,
             'timestamp' => time(),
+            'jwt' => $jwtToken
         ];
 
         return $response->withJson($message);

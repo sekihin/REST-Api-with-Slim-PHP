@@ -6,9 +6,12 @@ $vendorDir = dirname(__DIR__);
 $baseDir = dirname($vendorDir);
 
 return array(
+    'App\\App\\CustomResponse' => $baseDir . '/src/App/CustomResponse.php',
+    'App\\App\\ResponseFactory' => $baseDir . '/src/App/ResponseFactory.php',
     'App\\Command\\CrudGeneratorCommand' => $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorCommand.php',
     'App\\Command\\CrudGeneratorEntity' => $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorEntity.php',
     'App\\Command\\CrudGeneratorService' => $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorService.php',
+    'App\\Controller\\Home' => $baseDir . '/src/Controller/Home.php',
     'Attribute' => $vendorDir . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
     'CURLStringFile' => $vendorDir . '/symfony/polyfill-php81/Resources/stubs/CURLStringFile.php',
     'Clue\\React\\NDJson\\Decoder' => $vendorDir . '/clue/ndjson-react/src/Decoder.php',
@@ -2074,6 +2077,9 @@ return array(
     'Symfony\\Polyfill\\Php80\\Php80' => $vendorDir . '/symfony/polyfill-php80/Php80.php',
     'Symfony\\Polyfill\\Php80\\PhpToken' => $vendorDir . '/symfony/polyfill-php80/PhpToken.php',
     'Symfony\\Polyfill\\Php81\\Php81' => $vendorDir . '/symfony/polyfill-php81/Php81.php',
+    'Tests\\integration\\CustomResponseTest' => $baseDir . '/tests/integration/CustomResponseTest.php',
+    'Tests\\integration\\HomeTest' => $baseDir . '/tests/integration/HomeTest.php',
+    'Tests\\integration\\TestCase' => $baseDir . '/tests/integration/TestCase.php',
     'Tuupola\\Http\\Factory\\RequestFactory' => $vendorDir . '/tuupola/http-factory/src/RequestFactory.php',
     'Tuupola\\Http\\Factory\\ResponseFactory' => $vendorDir . '/tuupola/http-factory/src/ResponseFactory.php',
     'Tuupola\\Http\\Factory\\ServerRequestFactory' => $vendorDir . '/tuupola/http-factory/src/ServerRequestFactory.php',

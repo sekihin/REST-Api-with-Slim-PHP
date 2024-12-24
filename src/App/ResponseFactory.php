@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-use App\CustomResponse;
+namespace App\App;
+
+use App\App\CustomResponse;
 use Fig\Http\Message\StatusCodeInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface as Response;

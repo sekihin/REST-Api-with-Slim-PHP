@@ -8,7 +8,7 @@ $baseDir = dirname($vendorDir);
 return array(
     'Tuupola\\Middleware\\' => array($vendorDir . '/tuupola/callable-handler/src', $vendorDir . '/tuupola/cors-middleware/src'),
     'Tuupola\\Http\\Factory\\' => array($vendorDir . '/tuupola/http-factory/src'),
-    'Tests\\' => array($vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/tests'),
+    'Tests\\' => array($baseDir . '/tests', $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/tests'),
     'Symfony\\Polyfill\\Php81\\' => array($vendorDir . '/symfony/polyfill-php81'),
     'Symfony\\Polyfill\\Php80\\' => array($vendorDir . '/symfony/polyfill-php80'),
     'Symfony\\Polyfill\\Mbstring\\' => array($vendorDir . '/symfony/polyfill-mbstring'),
@@ -70,5 +70,5 @@ return array(
     'Composer\\Semver\\' => array($vendorDir . '/composer/semver/src'),
     'Composer\\Pcre\\' => array($vendorDir . '/composer/pcre/src'),
     'Clue\\React\\NDJson\\' => array($vendorDir . '/clue/ndjson-react/src'),
-    'App\\' => array($vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src'),
+    'App\\' => array($baseDir . '/src', $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src'),
 );

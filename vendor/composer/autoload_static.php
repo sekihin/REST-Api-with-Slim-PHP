@@ -142,7 +142,8 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
         ),
         'Tests\\' => 
         array (
-            0 => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/tests',
+            0 => __DIR__ . '/../..' . '/tests',
+            1 => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/tests',
         ),
         'Symfony\\Polyfill\\Php81\\' => 
         array (
@@ -392,7 +393,8 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
         ),
         'App\\' => 
         array (
-            0 => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src',
+            0 => __DIR__ . '/../..' . '/src',
+            1 => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src',
         ),
     );
 
@@ -407,9 +409,12 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
     );
 
     public static $classMap = array (
+        'App\\App\\CustomResponse' => __DIR__ . '/../..' . '/src/App/CustomResponse.php',
+        'App\\App\\ResponseFactory' => __DIR__ . '/../..' . '/src/App/ResponseFactory.php',
         'App\\Command\\CrudGeneratorCommand' => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorCommand.php',
         'App\\Command\\CrudGeneratorEntity' => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorEntity.php',
         'App\\Command\\CrudGeneratorService' => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorService.php',
+        'App\\Controller\\Home' => __DIR__ . '/../..' . '/src/Controller/Home.php',
         'Attribute' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
         'CURLStringFile' => __DIR__ . '/..' . '/symfony/polyfill-php81/Resources/stubs/CURLStringFile.php',
         'Clue\\React\\NDJson\\Decoder' => __DIR__ . '/..' . '/clue/ndjson-react/src/Decoder.php',
@@ -2475,6 +2480,9 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
         'Symfony\\Polyfill\\Php80\\Php80' => __DIR__ . '/..' . '/symfony/polyfill-php80/Php80.php',
         'Symfony\\Polyfill\\Php80\\PhpToken' => __DIR__ . '/..' . '/symfony/polyfill-php80/PhpToken.php',
         'Symfony\\Polyfill\\Php81\\Php81' => __DIR__ . '/..' . '/symfony/polyfill-php81/Php81.php',
+        'Tests\\integration\\CustomResponseTest' => __DIR__ . '/../..' . '/tests/integration/CustomResponseTest.php',
+        'Tests\\integration\\HomeTest' => __DIR__ . '/../..' . '/tests/integration/HomeTest.php',
+        'Tests\\integration\\TestCase' => __DIR__ . '/../..' . '/tests/integration/TestCase.php',
         'Tuupola\\Http\\Factory\\RequestFactory' => __DIR__ . '/..' . '/tuupola/http-factory/src/RequestFactory.php',
         'Tuupola\\Http\\Factory\\ResponseFactory' => __DIR__ . '/..' . '/tuupola/http-factory/src/ResponseFactory.php',
         'Tuupola\\Http\\Factory\\ServerRequestFactory' => __DIR__ . '/..' . '/tuupola/http-factory/src/ServerRequestFactory.php',
