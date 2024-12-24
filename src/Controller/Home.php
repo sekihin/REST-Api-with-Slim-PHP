@@ -9,6 +9,8 @@ use Pimple\Psr11\Container;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
+use Bayfront\MonologPDO\PDOHandler;
+use Monolog\Logger;
 
 final class Home
 {
@@ -54,7 +56,7 @@ final class Home
 
     public function getStatus(Request $request, Response $response): Response
     {
-        $this->container->get('db');
+        $pdo = $this->container->get('db');
         $status = [
             'status' => [
                 'database' => 'OK',
@@ -63,6 +65,12 @@ final class Home
             'version' => self::API_VERSION,
             'timestamp' => time(),
         ];
+
+        /** @var PDO $pdo */
+        $log = (new Logger('channel_name'))->pushHandler(new PDOHandler($pdo, 'status_logs'));
+
+		//Now you can use the logger, and further attach additional information
+		$log->info('Adding a new user', array('username' => 'Seldaek'));
 
         return $response->withJson($status);
     }

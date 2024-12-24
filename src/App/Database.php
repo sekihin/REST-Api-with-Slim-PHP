@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Bayfront\MonologPDO\PDOHandler;
+
 $container['db'] = static function (): PDO {
     $dsn = sprintf(
         'mysql:host=%s;dbname=%s;port=%s;charset=utf8',
@@ -13,6 +15,11 @@ $container['db'] = static function (): PDO {
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+
+    /** @var PDO $pdo */
+    $handler = new PDOHandler($pdo, 'status_logs');
+
+    $handler->up();
 
     return $pdo;
 };

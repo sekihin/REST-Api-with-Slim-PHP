@@ -1,4 +1,4 @@
-Options -Indexes
+Options -Indexes +FollowSymLinks
 IndexIgnore *
 
 <Files ~ "\.(env|json|config.js|md|gitignore|gitattributes|lock|log)$">

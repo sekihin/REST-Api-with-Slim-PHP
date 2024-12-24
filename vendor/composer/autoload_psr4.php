@@ -70,5 +70,7 @@ return array(
     'Composer\\Semver\\' => array($vendorDir . '/composer/semver/src'),
     'Composer\\Pcre\\' => array($vendorDir . '/composer/pcre/src'),
     'Clue\\React\\NDJson\\' => array($vendorDir . '/clue/ndjson-react/src'),
+    'Bayfront\\MonologPDO\\' => array($vendorDir . '/bayfrontmedia/monolog-pdo/src'),
+    'Bayfront\\ArrayHelpers\\' => array($vendorDir . '/bayfrontmedia/php-array-helpers/src'),
     'App\\' => array($baseDir . '/src', $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src'),
 );

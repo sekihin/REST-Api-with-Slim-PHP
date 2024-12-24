@@ -10,6 +10,24 @@
         'dev' => true,
     ),
     'versions' => array(
+        'bayfrontmedia/monolog-pdo' => array(
+            'pretty_version' => 'v1.0.1',
+            'version' => '1.0.1.0',
+            'reference' => 'eccc2be64cd70384257954f94bb2219f399055dc',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../bayfrontmedia/monolog-pdo',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
+        'bayfrontmedia/php-array-helpers' => array(
+            'pretty_version' => 'v2.0.1',
+            'version' => '2.0.1.0',
+            'reference' => '3aac6208e08cbdef3c65fae5c08d1e3cf68f35bc',
+            'type' => 'library',
+            'install_path' => __DIR__ . '/../bayfrontmedia/php-array-helpers',
+            'aliases' => array(),
+            'dev_requirement' => false,
+        ),
         'clue/ndjson-react' => array(
             'pretty_version' => 'v1.3.0',
             'version' => '1.3.0.0',

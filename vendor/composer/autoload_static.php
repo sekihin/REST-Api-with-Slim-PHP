@@ -124,6 +124,11 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
             'Composer\\Pcre\\' => 14,
             'Clue\\React\\NDJson\\' => 18,
         ),
+        'B' => 
+        array (
+            'Bayfront\\MonologPDO\\' => 20,
+            'Bayfront\\ArrayHelpers\\' => 22,
+        ),
         'A' => 
         array (
             'App\\' => 4,
@@ -391,6 +396,14 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
         array (
             0 => __DIR__ . '/..' . '/clue/ndjson-react/src',
         ),
+        'Bayfront\\MonologPDO\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/bayfrontmedia/monolog-pdo/src',
+        ),
+        'Bayfront\\ArrayHelpers\\' => 
+        array (
+            0 => __DIR__ . '/..' . '/bayfrontmedia/php-array-helpers/src',
+        ),
         'App\\' => 
         array (
             0 => __DIR__ . '/../..' . '/src',
@@ -416,6 +429,8 @@ class ComposerStaticInitfd1cf9962b78cea60640b923d5d7e05a
         'App\\Command\\CrudGeneratorService' => __DIR__ . '/..' . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorService.php',
         'App\\Controller\\Home' => __DIR__ . '/../..' . '/src/Controller/Home.php',
         'Attribute' => __DIR__ . '/..' . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
+        'Bayfront\\ArrayHelpers\\Arr' => __DIR__ . '/..' . '/bayfrontmedia/php-array-helpers/src/Arr.php',
+        'Bayfront\\MonologPDO\\PDOHandler' => __DIR__ . '/..' . '/bayfrontmedia/monolog-pdo/src/PDOHandler.php',
         'CURLStringFile' => __DIR__ . '/..' . '/symfony/polyfill-php81/Resources/stubs/CURLStringFile.php',
         'Clue\\React\\NDJson\\Decoder' => __DIR__ . '/..' . '/clue/ndjson-react/src/Decoder.php',
         'Clue\\React\\NDJson\\Encoder' => __DIR__ . '/..' . '/clue/ndjson-react/src/Encoder.php',

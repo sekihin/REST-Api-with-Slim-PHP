@@ -13,6 +13,8 @@ return array(
     'App\\Command\\CrudGeneratorService' => $vendorDir . '/maurobonfietti/skel-api-slim-php-crud-generator/src/Command/CrudGeneratorService.php',
     'App\\Controller\\Home' => $baseDir . '/src/Controller/Home.php',
     'Attribute' => $vendorDir . '/symfony/polyfill-php80/Resources/stubs/Attribute.php',
+    'Bayfront\\ArrayHelpers\\Arr' => $vendorDir . '/bayfrontmedia/php-array-helpers/src/Arr.php',
+    'Bayfront\\MonologPDO\\PDOHandler' => $vendorDir . '/bayfrontmedia/monolog-pdo/src/PDOHandler.php',
     'CURLStringFile' => $vendorDir . '/symfony/polyfill-php81/Resources/stubs/CURLStringFile.php',
     'Clue\\React\\NDJson\\Decoder' => $vendorDir . '/clue/ndjson-react/src/Decoder.php',
     'Clue\\React\\NDJson\\Encoder' => $vendorDir . '/clue/ndjson-react/src/Encoder.php',
