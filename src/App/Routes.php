@@ -9,8 +9,13 @@ use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 
-$app->get('/', 'App\Controller\Home:getHelp');
-$app->get('/status', 'App\Controller\Home:getStatus')
+$aliasPath = getenv('SLIM_ALIAS_PATH');
+if (!$aliasPath) {
+    $aliasPath = '/slim/';
+}
+
+$app->get($aliasPath, 'App\Controller\Home:getHelp');
+$app->get($aliasPath . 'status', 'App\Controller\Home:getStatus')
     ->add(function (Request $request, RequestHandler $handler): Response {
         $authHeader = $request->getHeaderLine('Authorization');
         if (!$authHeader || !str_starts_with($authHeader, 'Bearer ')) {
