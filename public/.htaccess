@@ -1,0 +1,22 @@
+Options -Indexes +FollowSymLinks
+IndexIgnore *
+
+<Files ~ "\.(env|json|config.js|md|gitignore|gitattributes|lock|log)$">
+    Require all denied
+</Files>
+
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag "noindex,nofollow,noarchive,nosnippet"
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, OPTIONS"
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_METHOD} !OPTIONS
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ index.php [QSA,L]
+
+    RewriteRule .* - [env=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
