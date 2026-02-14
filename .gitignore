@@ -1,11 +1,9 @@
 # Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
+vendor/
 
 # Other files and folders
 .settings/
+.vscode/
 
 # Executables
 *.swf

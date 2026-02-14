@@ -2,74 +2,77 @@
 
 declare(strict_types=1);
 
+use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
-use Psr\Http\Message\ServerRequestInterface as Request;
-use Psr\Http\Message\ResponseInterface as Response;
-use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
-use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
-use Slim\Psr7\Response as SlimResponse;
+use App\Application\Controllers\ChatController;
+use App\Application\Controllers\OrderController;     // 新規追加: 注文管理コントローラー
+use App\Application\Controllers\InventoryController; // 新規追加: 在庫管理コントローラー
 
-// 環境変数からパスを取得 (設定がない場合はルート直下とする修正を推奨)
-$aliasPath = getenv('SLIM_ALIAS_PATH');
-if (!$aliasPath) {
-    // '/api-test/' だと URLが /agent/api-test/getAccessToken になってしまうため、
-    // シンプルに '/' に変更するか、空文字にするのが一般的です。
-    // ここでは既存のロジックを尊重しつつ、空文字(ルート)にしています。
-    $aliasPath = '/'; 
-}
+/**
+ * アプリケーションルート定義
+ * * Slimアプリインスタンスを受け取り、各ルートを登録するクロージャを返します。
+ * * グローバルミドルウェア（CORS, BodyParsingなど）は別途 App.php 等で適用されている前提です。
+ */
+return function (App $app) {
 
-// --- 修正点: POST だけでなく GET も許可する ---
-$app->map(['GET', 'POST'], '/test', function (Request $request, Response $response) {
-    
-    $data = ['name' => 'test', 'value' => 123];
+    // 環境変数からパスを取得 (設定がない場合はルート直下とする修正を推奨)
+    $aliasPath = getenv('SLIM_ALIAS_PATH');
+    if (!$aliasPath) {
+        // '/api-test/' だと URLが /agent/getAccessToken になってしまうため、
+        // シンプルに '/' に変更するか、空文字にするのが一般的です。
+        // ここでは既存のロジックを尊重しつつ、空文字(ルート)にしています。
+        $aliasPath = '/'; 
+    }
 
-    // ログ確認用
-    error_log('Debug Data: ' . print_r($data, true));
-    error_log('Passed check point A');
+    // APIルートグループ
+    // 全てのルートは '/api' プレフィックスを持ちます。
+    $app->group('/api', function (RouteCollectorProxy $group) {
+        
+        // --- 🤖 AIエージェント機能 ---
+        // ユーザーからのチャットメッセージを受け取り、AIの回答を返します。
+        // URL: POST /api/chat
+        $group->post('/chat', [ChatController::class, 'chat']);
 
-    $response->getBody()->write(json_encode($data));
-    return $response->withHeader('Content-Type', 'application/json');
-});
-
-// 通常のルート定義
-$app->map(['GET', 'POST'], $aliasPath . 'getAccessToken', 'App\Controller\uisAgent:getAccessToken');
-
-// ミドルウェア付きのルート定義
-$app->map(['GET', 'POST'], $aliasPath . 'aichat', 'App\Controller\uisAgent:getAnswer')
-    ->add(function (Request $request, RequestHandler $handler): Response {
-        // (中略: 既存のJWTロジックそのままでOK)
-        $authHeader = $request->getHeaderLine('Authorization');
-
-        if (!$authHeader || !str_starts_with($authHeader, 'Bearer ')) {
-            $response = new SlimResponse();
-            $response->getBody()->write(json_encode(['error' => 'Token not provided or invalid']));
-            return $response->withStatus(401)->withHeader('Content-Type', 'application/json');
-        }
-
-        $token = substr($authHeader, 7);
-        $secretKey = $_SERVER['JWT_SECRET'] ?? 'your_jwt_secret_key';
-
-        try {
-            $decoded = JWT::decode($token, new Key($secretKey, 'HS256'));
+        // --- 📦 ドメイン: 在庫管理 (Inventory) ---
+        // 在庫に関する操作を '/inventory' グループにまとめます。
+        $group->group('/inventory', function (RouteCollectorProxy $inventory) {
             
-            if (isset($decoded->iat)) {
-                $iat_timestamp = $decoded->iat;
-                $invalid_cutoff = strtotime('2025-06-26 00:00:00');
-                if ($iat_timestamp < $invalid_cutoff) {
-                    throw new \Exception('expired token (iat check)');
-                }
-            }
-            $request = $request->withAttribute('jwt', $decoded);
+            // 在庫検索
+            // URL: GET /api/inventory/search?name=xxx
+            // 商品名などをクエリパラメータで受け取り、在庫状況を返します。
+            // AIツールの `CheckInventoryTool` と同様の検索ロジックを使用します。
+            $inventory->get('/search', [InventoryController::class, 'search']);
+            
+            // 特定SKUの在庫詳細取得 (RESTfulスタイル)
+            // URL: GET /api/inventory/{sku}
+            // $inventory->get('/{sku}', [InventoryController::class, 'get']);
+        });
 
-        } catch (\Exception $e) {
-            $response = new SlimResponse();
-            $response->getBody()->write(json_encode([
-                'error' => 'Invalid or expired token',
-                'message' => $e->getMessage()
-            ]));
-            return $response->withStatus(401)->withHeader('Content-Type', 'application/json');
-        }
+        // --- 🛒 ドメイン: 注文管理 (Orders) ---
+        // 注文に関する操作を '/orders' グループにまとめます。
+        $group->group('/orders', function (RouteCollectorProxy $orders) {
+            
+            // 注文詳細の取得
+            // URL: GET /api/orders/{id}
+            // {id} は注文ID (例: ORD-2023-001) に置き換わります。
+            $orders->get('/{id}', [OrderController::class, 'get']);
 
-        return $handler->handle($request);
+            // 返金申請処理
+            // URL: POST /api/orders/{id}/refund
+            // AIツールの `RefundOrderTool` と対になるAPIエンドポイントです。
+            // 管理画面やマイページから、人間がボタンを押して返金する際に使用されます。
+            $orders->post('/{id}/refund', [OrderController::class, 'refund']);
+            
+            // 注文作成 (例)
+            // URL: POST /api/orders
+            // $orders->post('', [OrderController::class, 'create']);
+        });
+
     });
+
+    // ... その他のルート (ヘルスチェック, OPTIONS, 404ハンドリングなど) ...
+
+    // 通常のルート定義
+    $app->map(['GET', 'POST'], $aliasPath . 'getAccessToken', 'App\Controller\uisAgent:getAccessToken');
+
+};
