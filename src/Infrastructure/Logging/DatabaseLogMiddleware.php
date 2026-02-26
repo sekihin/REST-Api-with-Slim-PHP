@@ -40,3 +40,4 @@ class DatabaseLogMiddleware
         return $response;
     }
 }
+

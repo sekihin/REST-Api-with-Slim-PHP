@@ -16,11 +16,13 @@ use App\Domain\Inventory\InventoryService;
 use App\Infrastructure\Persistence\InMemoryOrderRepository;
 // use App\Infrastructure\Persistence\MySQLOrderRepository; // 将来のDB切り替え用
 use App\Infrastructure\AI\Agents\OrderSupportAgent;
+use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool;
 use App\Infrastructure\AI\Tools\CheckInventoryTool;
 use App\Infrastructure\External\GeminiProvider;
 use App\Infrastructure\External\DeepSeekProvider;
+use App\Application\Controllers\ChatController;
 use Neuron\Providers\LLM\LLMInterface;
 use Psr\Log\LoggerInterface;
 use Monolog\Logger;            // 追加: ロガーの実装クラス
@@ -206,6 +208,27 @@ $container[OrderSupportAgent::class] = function ($c) {
     );
 };
 
+// AgentFactory
+$container[AgentFactory::class] = function ($c) {
+    return new AgentFactory($c);
+};
+
+// Redis接続
+$container[\Redis::class] = function ($c) {
+    $redis = new \Redis();
+    $redisHost = getenv('REDIS_HOST') ?: 'localhost';
+    $redisPort = (int)(getenv('REDIS_PORT') ?: 6379);
+    $redis->connect($redisHost, $redisPort);
+    return $redis;
+};
+
+// ChatController
+$container[ChatController::class] = function ($c) {
+    return new ChatController(
+        $c[AgentFactory::class],
+        $c[\Redis::class]
+    );
+};
 
 // --- コンテナ返却 ---
 // Slim Frameworkなどが利用できるPSR-11形式に変換して返します。

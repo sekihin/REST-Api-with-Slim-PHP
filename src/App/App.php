@@ -30,7 +30,7 @@ $customErrorHandler = require __DIR__ . '/ErrorHandler.php';
 
 (require __DIR__ . '/Services.php');
 (require __DIR__ . '/Repositories.php');
-(require __DIR__ . '/Routes.php');
+(require __DIR__ . '/Routes.php')($app);
 (require __DIR__ . '/NotFound.php')($app);
 
 $app->addErrorMiddleware(true, true, true);

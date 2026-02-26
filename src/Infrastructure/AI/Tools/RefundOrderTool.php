@@ -4,80 +4,102 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\AI\Tools;
 
-use Neuron\Tools\Tool;
+use NeuronAI\Tools\Tool;
+use NeuronAI\Tools\PropertyType;
+use NeuronAI\Tools\ToolProperty;
 use App\Domain\Order\OrderService;
 use Psr\Log\LoggerInterface;
+use NeuronAI\Exceptions\MissingCallbackParameter;
+use NeuronAI\Exceptions\ToolCallableNotSet;
 
 /**
  * 返金申請ツール (RefundOrderTool)
- * * AIエージェントがユーザーに代わって注文の返金プロセスを開始するためのツールです。
- * * 注意: 金銭に関わる操作のため、実行時には監査ログの記録や厳格なエラーハンドリングが行われます。
+ * AIエージェントがユーザーに代わって注文の返金プロセスを開始するためのツールです。
+ * 注意: 金銭に関わる操作のため、実行時には監査ログの記録や厳格なエラーハンドリングが行われます。
  */
 class RefundOrderTool extends Tool
 {
     /** @var OrderService 注文関連のビジネスロジックサービス */
-    private OrderService $orderService;
+    private readonly OrderService $orderService;
     
     /** @var LoggerInterface ログ出力用インターフェース（監査ログ記録用） */
-    private LoggerInterface $logger;
+    private readonly LoggerInterface $logger;
+
+    /**
+     * ツールの識別名
+     */
+    protected string $name = 'refund_order';
+
+    /**
+     * ツールの説明
+     * AIに対する指示書です。
+     */
+    protected ?string $description = '注文の返金申請を開始します。注意: 注文ステータスが返金可能であることを確認した後にのみ呼び出してください。';
+
+    /**
+     * プロパティ定義
+     */
+    protected array $properties = [];
 
     /**
      * コンストラクタ
-     * * @param OrderService $orderService 返金処理を実行するドメインサービス
-     * * @param LoggerInterface $logger 操作ログを記録するロガー
+     * @param OrderService $orderService 返金処理を実行するドメインサービス
+     * @param LoggerInterface $logger 操作ログを記録するロガー
      */
     public function __construct(
         OrderService $orderService,
         LoggerInterface $logger
     ) {
+        parent::__construct(
+            name: $this->name,
+            description: $this->description,
+            properties: $this->buildProperties(),
+            annotations: []
+        );
+
         $this->orderService = $orderService;
         $this->logger = $logger;
+        
+        // 実行コールバックを設定
+        $this->setCallable(fn (string $order_id, string $reason) => $this->run($order_id, $reason));
     }
 
-    /** * ツールの識別名 */
-    protected string $name = 'refund_order';
-
-    /** * ツールの説明
-     * * AIに対する指示書です。
-     * * 内容（訳）: "注文の返金申請を開始します。注意: 注文ステータスが返金可能であることを確認した後にのみ呼び出してください。"
-     */
-    protected string $description = '注文の返金申請を開始します。注意: 注文ステータスが返金可能であることを確認した後にのみ呼び出してください。';
-
     /**
-     * パラメータのJSON Schema定義
-     * * 返金処理に必要な「注文ID」と「理由」をAIに要求します。
+     * プロパティを構築
      */
-    protected array $parameters = [
-        'type' => 'object',
-        'properties' => [
-            'order_id' => [
-                'type' => 'string',
-                // 説明: 返金対象の注文番号
-                'description' => '返金対象の注文番号'
-            ],
-            'reason' => [
-                'type' => 'string',
-                // 説明: ユーザーが提示した返金理由（例: "商品破損" や "誤購入"）
-                'description' => 'ユーザーが提示した返金理由（例: "商品破損" や "誤購入"）'
-            ]
-        ],
-        'required' => ['order_id', 'reason'] // 両方のパラメータを必須とする
-    ];
+    private function buildProperties(): array
+    {
+        return [
+            new ToolProperty(
+                name: 'order_id',
+                type: PropertyType::STRING,
+                description: '返金対象の注文番号',
+                required: true
+            ),
+            new ToolProperty(
+                name: 'reason',
+                type: PropertyType::STRING,
+                description: 'ユーザーが提示した返金理由（例: "商品破損" や "誤購入"）',
+                required: true
+            )
+        ];
+    }
 
     /**
      * ツールの実行ロジック
-     * * @param array $args AIから渡された引数
+     * @param string $orderId 注文ID
+     * @param string $reason 返金理由
      * @return string AIに返すJSON形式の実行結果
      */
-    public function execute(array $args): string
+    private function run(string $orderId, string $reason): string
     {
-        // 引数の取得とデフォルト値の設定
-        $orderId = $args['order_id'] ?? '';
-        $reason = $args['reason'] ?? '理由なし'; // "理由なし"
-
         // バリデーション: 注文IDがない場合は即エラー
         if (empty($orderId)) {
-            return json_encode(['error' => '注文番号は必須です。']); // エラー: 注文番号は必須です
+            return json_encode(['error' => '注文番号は必須です。'], JSON_UNESCAPED_UNICODE);
+        }
+
+        if (empty($reason)) {
+            $reason = '理由なし';
         }
 
         try {
@@ -128,7 +150,23 @@ class RefundOrderTool extends Tool
             // ユーザー（およびAI）には「有人対応」を促すメッセージを返す。
             $this->logger->error("Refund failed for Order {$orderId}: " . $e->getMessage());
             
-            return json_encode(['error' => 'システムが混雑しています。有人対応へ切り替えてください。']); // "システムが混雑しています。有人対応へ切り替えてください"
+            return json_encode(['error' => 'システムが混雑しています。有人対応へ切り替えてください。'], JSON_UNESCAPED_UNICODE);
+        }
+    }
+
+    /**
+     * オプション：親クラスの execute をオーバーライド（カスタム実行ロジックが必要な場合）
+     */
+    public function execute(): void
+    {
+        try {
+            parent::execute();
+        } catch (MissingCallbackParameter | ToolCallableNotSet $e) {
+            // 親クラスから投げられたパラメータ/コールバック例外をキャッチし、ビジネスメッセージに変換
+            $this->setResult(json_encode([
+                'status' => 'error',
+                'message' => $e->getMessage()
+            ], JSON_UNESCAPED_UNICODE));
         }
     }
 }

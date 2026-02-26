@@ -1,5 +1,23 @@
 <?php
 
+/***
+ * 关于下面实际场景的DEMO。
+
+# 举个实际场景（订单系统）
+
+用户说：
+
+> “我昨天买的那个商品怎么还没发货？”
+
+Neuron AI 可以：
+
+1. 解析自然语言
+2. 调用订单查询工具
+3. 检查库存系统
+4. 判断是否异常
+5. 自动生成客服回复
+ */
+
 require __DIR__ . '/vendor/autoload.php';
 
 use App\Domain\Order\Order;
@@ -66,12 +84,8 @@ $orderRepo = new class($mockOrder, $userId) implements OrderRepository {
 };
 
 // 模拟 OrderService
-// 我们扩展一下 Service，允许它“查找用户最近的订单”
-$orderService = new class($orderRepo) extends \App\Domain\Order\OrderService {
-    public function getLatestOrder(string $userId): ?Order {
-        return $this->orderRepository->findLatestOrder($userId);
-    }
-};
+// OrderService に getLatestOrder メソッドが追加されたので、直接使用できます
+$orderService = new \App\Domain\Order\OrderService($orderRepo);
 
 // 模拟 InventoryService
 $inventoryService = new class($mockInventory) extends InventoryService {

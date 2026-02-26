@@ -63,4 +63,19 @@ class InMemoryOrderRepository implements OrderRepository
         // 配列のキー存在確認を行い、データを取得（DB検索の代替処理）
         return $this->orders[$id] ?? null;
     }
+
+    /**
+     * ユーザーIDによる最新注文の検索
+     * * 注：この実装は簡易版で、実際の実装ではユーザーIDと注文の関連を管理する必要があります。
+     * * @param string $userId ユーザーID
+     * @return Order|null 注文が見つかった場合はOrderオブジェクト、見つからない場合はnull
+     */
+    public function findLatestOrder(string $userId): ?Order
+    {
+        // 簡易実装：最初の注文を返す（実際の実装では、ユーザーIDに基づいて最新の注文を返す必要があります）
+        // このリポジトリはユーザーIDを保持していないため、nullを返します
+        // 実際の実装では、OrderエンティティにuserIdフィールドを追加するか、
+        // 別のマッピングテーブルを使用する必要があります
+        return null;
+    }
 }

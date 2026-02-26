@@ -18,4 +18,12 @@ interface OrderRepository
      * @return Order|null 注文が見つかった場合はOrderオブジェクト、見つからない場合はnullを返します。
      */
     public function findOrderOfId(string $id): ?Order;
+
+    /**
+     * ユーザーIDによる最新注文の検索
+     * * 指定されたユーザーIDに対応する最新の注文エンティティを取得します。
+     * * @param string $userId 検索対象のユーザーID
+     * @return Order|null 注文が見つかった場合はOrderオブジェクト、見つからない場合はnullを返します。
+     */
+    public function findLatestOrder(string $userId): ?Order;
 }

@@ -48,4 +48,19 @@ class OrderService
         // リポジトリを利用してデータを検索
         return $this->orderRepository->findOrderOfId($orderId);
     }
+
+    /**
+     * ユーザーIDによる最新注文の取得
+     * * 指定されたユーザーIDに対応する最新の注文エンティティを返します。
+     * * @param string $userId ユーザーID
+     * @return Order|null 注文が見つかった場合はOrderオブジェクト、なければnull
+     */
+    public function getLatestOrder(string $userId): ?Order
+    {
+        // ユーザーIDの前後の空白を除去（サニタイズ処理）
+        $userId = trim($userId);
+        
+        // リポジトリを利用してデータを検索
+        return $this->orderRepository->findLatestOrder($userId);
+    }
 }
