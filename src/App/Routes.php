@@ -20,7 +20,9 @@ return function (App $app) {
     // Add test route in Routes.php
     // GET /agent/test と POST /agent/test の両方を受け付ける
     $app->map(['GET', 'POST'], '/agent/test', function (Request $request, Response $response) {
-        return $response->withJson(['status' => 'ok']);
+        $payload = json_encode(['status' => 'ok'], JSON_UNESCAPED_UNICODE);
+        $response->getBody()->write($payload);
+        return $response->withHeader('Content-Type', 'application/json');
     });
     
     // APIルートグループ
