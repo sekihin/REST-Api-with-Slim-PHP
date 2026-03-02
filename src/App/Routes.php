@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 use Slim\App;
 use Slim\Routing\RouteCollectorProxy;
+use Psr\Http\Message\RequestInterface as Request; 
+use Psr\Http\Message\ResponseInterface as Response;
 use App\Application\Controllers\ChatController;
-use App\Application\Controllers\OrderController;     // 新規追加: 注文管理コントローラー
-use App\Application\Controllers\InventoryController; // 新規追加: 在庫管理コントローラー
-
+use App\Application\Controllers\OrderController; 
+use App\Application\Controllers\InventoryController; 
+use App\Application\Controllers\AuthController;
 /**
  * アプリケーションルート定義
  * * Slimアプリインスタンスを受け取り、各ルートを登録するクロージャを返します。
@@ -15,15 +17,12 @@ use App\Application\Controllers\InventoryController; // 新規追加: 在庫管�
  */
 return function (App $app) {
 
-    // 環境変数からパスを取得 (設定がない場合はルート直下とする修正を推奨)
-    $aliasPath = getenv('SLIM_ALIAS_PATH');
-    if (!$aliasPath) {
-        // '/api-test/' だと URLが /agent/getAccessToken になってしまうため、
-        // シンプルに '/' に変更するか、空文字にするのが一般的です。
-        // ここでは既存のロジックを尊重しつつ、空文字(ルート)にしています。
-        $aliasPath = '/'; 
-    }
-
+    // Add test route in Routes.php
+    // GET /agent/test と POST /agent/test の両方を受け付ける
+    $app->map(['GET', 'POST'], '/agent/test', function (Request $request, Response $response) {
+        return $response->withJson(['status' => 'ok']);
+    });
+    
     // APIルートグループ
     // 全てのルートは '/api' プレフィックスを持ちます。
     $app->group('/api', function (RouteCollectorProxy $group) {
@@ -73,6 +72,6 @@ return function (App $app) {
     // ... その他のルート (ヘルスチェック, OPTIONS, 404ハンドリングなど) ...
 
     // 通常のルート定義
-    $app->map(['GET', 'POST'], $aliasPath . 'getAccessToken', 'App\Controller\uisAgent:getAccessToken');
+    $app->map(['GET', 'POST'], '/agent/getAccessToken', [AuthController::class, 'getAccessToken']);
 
 };
