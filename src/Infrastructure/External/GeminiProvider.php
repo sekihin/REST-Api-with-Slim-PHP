@@ -6,7 +6,11 @@ namespace App\Infrastructure\External;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use Neuron\Providers\LLM\LLMInterface;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -21,6 +25,8 @@ class GeminiProvider implements LLMInterface
     private string $model;
     private LoggerInterface $logger;
     private float $temperature;
+    private int $timeout;
+    private int $maxRetries;
 
     // Gemini APIのエンドポイント (v1beta)
     private const BASE_URI = 'https://generativelanguage.googleapis.com/v1beta/models/';
@@ -32,23 +38,73 @@ class GeminiProvider implements LLMInterface
      * * @param string $model       モデル名 (推奨: 'gemini-1.5-flash' は高速/安価, 'gemini-1.5-pro' は高性能)
      * * @param float  $temperature 温度 (0.0 - 1.0)
      * * @param int    $timeout     タイムアウト秒数
+     * * @param int    $maxRetries  再試行回数（5xx やネットワークエラー時）
      */
     public function __construct(
         string $apiKey,
         LoggerInterface $logger,
         string $model = 'gemini-1.5-flash', 
         float $temperature = 0.5,
-        int $timeout = 60
+        int $timeout = 60,
+        int $maxRetries = 3
     ) {
         $this->model = $model;
         $this->logger = $logger;
         $this->temperature = $temperature;
+        $this->timeout = $timeout;
+        $this->maxRetries = $maxRetries;
 
         // Guzzleクライアントの初期化
         // Gemini APIは 'Authorization: Bearer' ではなく 'x-goog-api-key' ヘッダーを使用します。
+        // DeepSeekProvider 同様、HandlerStack + Retry ミドルウェアを使って一時的なエラーに強くします。
+
+        $handlerStack = HandlerStack::create();
+
+        $handlerStack->push(Middleware::retry(
+            function (
+                int $retries,
+                RequestInterface $request,
+                ?ResponseInterface $response = null,
+                ?GuzzleException $exception = null
+            ): bool {
+                if ($retries >= $this->maxRetries) {
+                    return false;
+                }
+
+                // 5xx は再試行
+                if ($response !== null && $response->getStatusCode() >= 500) {
+                    $this->logger->warning('Gemini retry due to 5xx response', [
+                        'status' => $response->getStatusCode(),
+                        'retries' => $retries,
+                        'uri' => (string)$request->getUri(),
+                    ]);
+                    return true;
+                }
+
+                // タイムアウトや一時的なネットワークエラーも再試行対象
+                if ($exception !== null) {
+                    $this->logger->warning('Gemini retry due to transport exception', [
+                        'error' => $exception->getMessage(),
+                        'retries' => $retries,
+                        'uri' => (string)$request->getUri(),
+                    ]);
+                    return true;
+                }
+
+                return false;
+            },
+            function (int $retries): int {
+                // シンプルな線形バックオフ（ms）
+                return 500 * $retries;
+            }
+        ));
+
         $this->httpClient = new Client([
+            'handler' => $handlerStack,
             'base_uri' => self::BASE_URI,
-            'timeout'  => $timeout,
+            'timeout'  => $this->timeout,
+            'connect_timeout' => 10,
+            'http_errors' => false, // ステータスコード検証は自前で行う
             'headers'  => [
                 'Content-Type' => 'application/json',
                 'x-goog-api-key' => $apiKey,
@@ -104,7 +160,12 @@ class GeminiProvider implements LLMInterface
         }
 
         try {
-            $this->logger->debug('Gemini Request Payload', ['model' => $this->model, 'payload' => json_encode($payload)]);
+            $this->logger->debug('Gemini Request Payload', [
+                'model' => $this->model,
+                'payload' => json_encode($payload),
+                'timeout' => $this->timeout,
+                'max_retries' => $this->maxRetries,
+            ]);
 
             // 4. APIリクエスト送信
             // エンドポイント形式: models/{model}:generateContent
@@ -112,16 +173,51 @@ class GeminiProvider implements LLMInterface
                 'json' => $payload
             ]);
 
-            $body = json_decode((string)$response->getBody(), true);
+            $statusCode = $response->getStatusCode();
+            $rawBody = (string)$response->getBody();
+
+            // ステータスコード検証（4xx/5xx はエラー扱い）
+            if ($statusCode < 200 || $statusCode >= 300) {
+                $this->logger->error('Gemini API non-success response', [
+                    'status' => $statusCode,
+                    'body' => mb_substr($rawBody, 0, 1000), // ログサイズを制限
+                ]);
+                throw new \RuntimeException(sprintf(
+                    'Gemini API returned non-success status code: %d',
+                    $statusCode
+                ));
+            }
+
+            // レスポンスボディの取得とJSONデコード
+            try {
+                $body = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                $this->logger->error('Gemini API response parsing failed', [
+                    'error' => $e->getMessage(),
+                    'body' => mb_substr($rawBody, 0, 1000),
+                ]);
+                throw new \RuntimeException('Gemini API response parsing failed: ' . $e->getMessage(), 0, $e);
+            }
             
             // 5. レスポンスの解析とOpenAI形式への逆変換
             return $this->parseResponse($body);
 
         } catch (GuzzleException $e) {
             // Googleの詳細なエラー情報を取得してログに残す
-            $errorBody = $e->getResponse() ? (string)$e->getResponse()->getBody() : '';
-            $this->logger->error('Gemini API Error', ['msg' => $e->getMessage(), 'body' => $errorBody]);
-            throw new \RuntimeException('Gemini API request failed: ' . $e->getMessage());
+            $context = [
+                'error' => $e->getMessage(),
+            ];
+
+            if (method_exists($e, 'getRequest') && $e->getRequest() !== null) {
+                $context['request_uri'] = (string)$e->getRequest()->getUri();
+            }
+            if (method_exists($e, 'getResponse') && $e->getResponse() !== null) {
+                $context['status'] = $e->getResponse()->getStatusCode();
+                $context['response_body'] = mb_substr((string)$e->getResponse()->getBody(), 0, 1000);
+            }
+
+            $this->logger->error('Gemini API transport error', $context);
+            throw new \RuntimeException('Gemini API request failed: ' . $e->getMessage(), 0, $e);
         }
     }
 

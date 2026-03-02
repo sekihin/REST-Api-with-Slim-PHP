@@ -13,6 +13,7 @@ use Bayfront\MonologPDO\PDOHandler;
 use App\Domain\Order\OrderRepository;
 use App\Domain\Order\OrderService;
 use App\Domain\Inventory\InventoryService;
+use App\Domain\Knowledge\KnowledgeBaseService;
 use App\Infrastructure\Persistence\InMemoryOrderRepository;
 // use App\Infrastructure\Persistence\MySQLOrderRepository; // 将来のDB切り替え用
 use App\Infrastructure\AI\Agents\OrderSupportAgent;
@@ -20,6 +21,7 @@ use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool;
 use App\Infrastructure\AI\Tools\CheckInventoryTool;
+use App\Infrastructure\AI\Tools\SearchManuaryTool;
 use App\Infrastructure\External\GeminiProvider;
 use App\Infrastructure\External\DeepSeekProvider;
 use App\Application\Controllers\ChatController;
@@ -152,6 +154,32 @@ $container[RefundOrderTool::class] = function ($c) {
     );
 };
 
+// マニュアル検索ツール (重要)
+// Elasticsearch クライアントの登録
+$container[\Elastic\Elasticsearch\Client::class] = function ($c) {
+    return ClientBuilder::create()
+        ->setHosts(['http://localhost:9200'])
+        ->setRetries(3)
+        ->build();
+};
+
+// KnowledgeBaseService の登録
+$container[KnowledgeBaseService::class] = function ($c) {
+    $doubaoApiKey = getenv('DOUBAO_API_KEY') ?: throw new \Exception('Missing DOUBAO_API_KEY');
+    return new KnowledgeBaseService(
+        $c[\Elastic\Elasticsearch\Client::class],
+        $doubaoApiKey
+    );
+};
+
+// SearchManuaryTool の登録
+$container[SearchManuaryTool::class] = function ($c) {
+    return new SearchManuaryTool(
+        $c[KnowledgeBaseService::class],
+        $c[\Psr\Log\LoggerInterface::class]
+    );
+};
+
 // --- 6. AIエージェント & LLM (Brain) ---
 
 // LLMインターフェースの実装バインディング
@@ -202,9 +230,10 @@ $container[LLMInterface::class] = function ($c) {
 $container[OrderSupportAgent::class] = function ($c) {
     return new OrderSupportAgent(
         $c[LLMInterface::class],       // 脳
-        $c[LookupOrderTool::class],    // 道具1
-        $c[RefundOrderTool::class],    // 道具2
-        $c[CheckInventoryTool::class]  // 道具3
+        $c[LookupOrderTool::class],
+        $c[RefundOrderTool::class],
+        $c[CheckInventoryTool::class],
+        $c[SearchManuaryTool::class]
     );
 };
 

@@ -12,7 +12,7 @@ use Firebase\JWT\Key;
 use Bayfront\MonologPDO\PDOHandler;
 use Monolog\Logger;
 
-final class Home
+final class HomeController
 {
     private const API_NAME = 'slim4-api-skeleton';
 

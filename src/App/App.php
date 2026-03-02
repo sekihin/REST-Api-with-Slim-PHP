@@ -22,6 +22,9 @@ $app = AppFactory::create();
 
 // ミドルウェア・ルート設定
 $customErrorHandler = require __DIR__ . '/ErrorHandler.php';
+$errorMiddleware = $app->addErrorMiddleware(true, true, true);
+$errorMiddleware->setDefaultErrorHandler($customErrorHandler);
+
 (require __DIR__ . '/Middlewares.php')($app, $customErrorHandler);
 (require __DIR__ . '/Cors.php')($app);
 
@@ -32,7 +35,5 @@ $customErrorHandler = require __DIR__ . '/ErrorHandler.php';
 (require __DIR__ . '/Repositories.php');
 (require __DIR__ . '/Routes.php')($app);
 (require __DIR__ . '/NotFound.php')($app);
-
-$app->addErrorMiddleware(true, true, true);
 
 return $app;

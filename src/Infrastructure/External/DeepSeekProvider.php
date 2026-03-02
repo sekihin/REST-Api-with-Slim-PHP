@@ -6,7 +6,11 @@ namespace App\Infrastructure\External;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use Neuron\Providers\LLM\LLMInterface; // Neuronフレームワークで定義されたインターフェースと仮定
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -24,6 +28,8 @@ class DeepSeekProvider implements LLMInterface
     private string $model;
     private float $temperature;
     private int $maxTokens;
+    private int $timeout;
+    private int $maxRetries;
     private LoggerInterface $logger;
 
     /** @var string DeepSeek APIのエンドポイント */
@@ -37,6 +43,7 @@ class DeepSeekProvider implements LLMInterface
      * * @param float  $temperature サンプリング温度。DeepSeekは一般的な用途で 0.5 - 0.7 を推奨しています。
      * * @param int    $maxTokens   最大生成トークン数
      * * @param int    $timeout     HTTPリクエストのタイムアウト秒数
+     * * @param int    $maxRetries  再試行回数（5xx やネットワークエラー時）
      */
     public function __construct(
         string $apiKey,
@@ -44,19 +51,68 @@ class DeepSeekProvider implements LLMInterface
         string $model = 'deepseek-chat',
         float $temperature = 0.5, 
         int $maxTokens = 2048,
-        int $timeout = 60
+        int $timeout = 60,
+        int $maxRetries = 3
     ) {
         $this->apiKey = $apiKey;
         $this->model = $model;
         $this->temperature = $temperature;
         $this->maxTokens = $maxTokens;
         $this->logger = $logger;
+        $this->timeout = $timeout;
+        $this->maxRetries = $maxRetries;
 
         // Guzzleクライアントの初期化
         // 共通ヘッダー（Authorizationなど）をここで設定しておきます。
+        // さらに HandlerStack + Retry ミドルウェアで、5xx や一時的なネットワークエラー時に自動再試行します。
+
+        $handlerStack = HandlerStack::create();
+
+        $handlerStack->push(Middleware::retry(
+            function (
+                int $retries,
+                RequestInterface $request,
+                ?ResponseInterface $response = null,
+                ?GuzzleException $exception = null
+            ): bool {
+                if ($retries >= $this->maxRetries) {
+                    return false;
+                }
+
+                // 5xx は再試行
+                if ($response !== null && $response->getStatusCode() >= 500) {
+                    $this->logger->warning('DeepSeek retry due to 5xx response', [
+                        'status' => $response->getStatusCode(),
+                        'retries' => $retries,
+                        'uri' => (string)$request->getUri(),
+                    ]);
+                    return true;
+                }
+
+                // タイムアウトや一時的なネットワークエラーも再試行対象
+                if ($exception !== null) {
+                    $this->logger->warning('DeepSeek retry due to transport exception', [
+                        'error' => $exception->getMessage(),
+                        'retries' => $retries,
+                        'uri' => (string)$request->getUri(),
+                    ]);
+                    return true;
+                }
+
+                return false;
+            },
+            function (int $retries): int {
+                // シンプルな線形バックオフ（ms）
+                return 500 * $retries;
+            }
+        ));
+
         $this->httpClient = new Client([
+            'handler' => $handlerStack,
             'base_uri' => self::BASE_URI,
-            'timeout'  => $timeout,
+            'timeout'  => $this->timeout,
+            'connect_timeout' => 10,
+            'http_errors' => false, // ステータスコード検証は自前で行う
             'headers'  => [
                 'Authorization' => 'Bearer ' . $this->apiKey,
                 'Content-Type'  => 'application/json',
@@ -97,7 +153,9 @@ class DeepSeekProvider implements LLMInterface
             $this->logger->debug('DeepSeek Request', [
                 'model' => $this->model,
                 'msg_count' => count($messages),
-                'has_tools' => !empty($tools)
+                'has_tools' => !empty($tools),
+                'timeout' => $this->timeout,
+                'max_retries' => $this->maxRetries,
             ]);
 
             // POSTリクエストの送信
@@ -105,11 +163,37 @@ class DeepSeekProvider implements LLMInterface
                 'json' => $payload
             ]);
 
-            // レスポンスボディの取得とJSONデコード
-            $body = json_decode((string)$response->getBody(), true);
+            $statusCode = $response->getStatusCode();
+            $rawBody = (string)$response->getBody();
 
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new \RuntimeException('DeepSeek API response parsing failed: ' . json_last_error_msg());
+            // ステータスコード検証（4xx/5xx はエラー扱い）
+            if ($statusCode < 200 || $statusCode >= 300) {
+                $this->logger->error('DeepSeek API non-success response', [
+                    'status' => $statusCode,
+                    'body' => mb_substr($rawBody, 0, 1000), // ログサイズを制限
+                ]);
+                throw new \RuntimeException(sprintf(
+                    'DeepSeek API returned non-success status code: %d',
+                    $statusCode
+                ));
+            }
+
+            // レスポンスボディの取得とJSONデコード
+            try {
+                $body = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                $this->logger->error('DeepSeek API response parsing failed', [
+                    'error' => $e->getMessage(),
+                    'body' => mb_substr($rawBody, 0, 1000),
+                ]);
+                throw new \RuntimeException('DeepSeek API response parsing failed: ' . $e->getMessage(), 0, $e);
+            }
+
+            if (!isset($body['choices'][0]['message'])) {
+                $this->logger->error('DeepSeek API response missing choices[0].message', [
+                    'body' => $body,
+                ]);
+                throw new \RuntimeException('DeepSeek API response format is unexpected (choices[0].message not found).');
             }
 
             // メインコンテンツの抽出
@@ -130,7 +214,19 @@ class DeepSeekProvider implements LLMInterface
 
         } catch (GuzzleException $e) {
             // HTTP通信エラーのハンドリング
-            $this->logger->error('DeepSeek API Error: ' . $e->getMessage());
+            $context = [
+                'error' => $e->getMessage(),
+            ];
+
+            if (method_exists($e, 'getRequest') && $e->getRequest() !== null) {
+                $context['request_uri'] = (string)$e->getRequest()->getUri();
+            }
+            if (method_exists($e, 'getResponse') && $e->getResponse() !== null) {
+                $context['status'] = $e->getResponse()->getStatusCode();
+                $context['response_body'] = mb_substr((string)$e->getResponse()->getBody(), 0, 1000);
+            }
+
+            $this->logger->error('DeepSeek API transport error', $context);
             
             // 必要に応じてリトライロジックや、フォールバック（別のLLMへの切り替えなど）を検討する場所です
             throw new \RuntimeException('Failed to communicate with DeepSeek API.', 0, $e);
