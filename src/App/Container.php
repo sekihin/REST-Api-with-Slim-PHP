@@ -15,8 +15,7 @@ use App\Domain\Order\OrderService;
 use App\Domain\Inventory\InventoryService;
 use App\Domain\Knowledge\KnowledgeBaseService;
 use App\Infrastructure\Persistence\InMemoryOrderRepository;
-// use App\Infrastructure\Persistence\MySQLOrderRepository; // 将来のDB切り替え用
-use App\Infrastructure\AI\Agents\OrderSupportAgent;
+use App\Infrastructure\AI\Agents\RouterAgent;
 use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool;
@@ -24,11 +23,16 @@ use App\Infrastructure\AI\Tools\CheckInventoryTool;
 use App\Infrastructure\AI\Tools\SearchManuaryTool;
 use App\Infrastructure\External\GeminiProvider;
 use App\Infrastructure\External\DeepSeekProvider;
+use App\Infrastructure\External\DoubaoEmbeddingProvider;
+use App\Infrastructure\External\GeminiEmbeddingProvider;
 use App\Application\Controllers\ChatController;
+use App\Application\Controllers\OrderController;
+use App\Application\Controllers\InventoryController;
 use Neuron\Providers\LLM\LLMInterface;
+use Elastic\Elasticsearch\ClientBuilder;
 use Psr\Log\LoggerInterface;
-use Monolog\Logger;            // 追加: ロガーの実装クラス
-use Monolog\Handler\StreamHandler; // 追加: 出力ハンドラー
+use Monolog\Logger; 
+use Monolog\Handler\StreamHandler;
 
 // Pimpleコンテナの初期化
 $container = new Container();
@@ -163,12 +167,27 @@ $container[\Elastic\Elasticsearch\Client::class] = function ($c) {
         ->build();
 };
 
+//埋込みプロバイダーの動的選択
+$container['embedding_provider'] = function ($c) {
+    $embeddingModel = getenv('EMBEDDING_MODEL') ?: 'doubao';
+    
+    switch (strtolower($embeddingModel)) {
+        case 'gemini':
+            $apiKey = getenv('GEMINI_API_KEY') ?: throw new \Exception('Missing GEMINI_API_KEY for embedding');
+            return new GeminiEmbeddingProvider($apiKey);
+        
+        case 'doubao':
+        default:
+            $apiKey = getenv('DOBAO_API_KEY') ?: throw new \Exception('Missing DOBAO_API_KEY for embedding');
+            return new DoubaoEmbeddingProvider($apiKey);
+    }
+};
+
 // KnowledgeBaseService の登録
 $container[KnowledgeBaseService::class] = function ($c) {
-    $doubaoApiKey = getenv('DOUBAO_API_KEY') ?: throw new \Exception('Missing DOUBAO_API_KEY');
     return new KnowledgeBaseService(
         $c[\Elastic\Elasticsearch\Client::class],
-        $doubaoApiKey
+        $c['embedding_provider']
     );
 };
 
@@ -225,15 +244,13 @@ $container[LLMInterface::class] = function ($c) {
     }
 };
 
-// 注文サポートエージェント本体
-// 必要なツールだけを持たせてインスタンス化します。
-$container[OrderSupportAgent::class] = function ($c) {
-    return new OrderSupportAgent(
-        $c[LLMInterface::class],       // 脳
+// ルーターエージェント本体
+$container[RouterAgent::class] = function ($c) {
+    return new RouterAgent(
+        $c[LLMInterface::class],
         $c[LookupOrderTool::class],
         $c[RefundOrderTool::class],
-        $c[CheckInventoryTool::class],
-        $c[SearchManuaryTool::class]
+        $c[CheckInventoryTool::class]
     );
 };
 

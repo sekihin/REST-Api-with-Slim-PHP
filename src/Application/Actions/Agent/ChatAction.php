@@ -45,7 +45,7 @@ class ChatAction
 
         // 2. エージェントの生成
         // ファクトリを通じて、このユーザー専用の設定（プロンプトやツール）を持つエージェントを作成します。
-        $agent = $this->agentFactory->createOrderSupportAgent($userId);
+        $agent = $this->agentFactory->createRouterAgent($userId);
 
         // 3. 会話履歴のロード（コンテキストの復元）
         // Redisから過去のやり取りを取得し、エージェントの「短期記憶」としてセットします。

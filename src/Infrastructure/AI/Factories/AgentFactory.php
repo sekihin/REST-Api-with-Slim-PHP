@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\AI\Factories;
 
-use App\Infrastructure\AI\Agents\OrderSupportAgent;
+use App\Infrastructure\AI\Agents\RouterAgent;
 use Neuron\Providers\LLM\LLMInterface;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool;
@@ -33,11 +33,11 @@ class AgentFactory
     }
 
     /**
-     * 注文サポートエージェントを作成する
+     * ルーターエージェントを作成する
      * @param string $userId 現在のユーザーID（コンテキストとして使用）
-     * @return OrderSupportAgent 構成済みのエージェントインスタンス
+     * @return RouterAgent 構成済みのエージェントインスタンス
      */
-    public function createOrderSupportAgent(string $userId): OrderSupportAgent
+    public function createRouterAgent(string $userId): RouterAgent
     {
         // DIコンテナから必要な依存関係を取得
         $llm = $this->container->get(LLMInterface::class);
@@ -45,9 +45,8 @@ class AgentFactory
         $refundOrderTool = $this->container->get(RefundOrderTool::class);
         $checkInventoryTool = $this->container->get(CheckInventoryTool::class);
 
-        // OrderSupportAgentをインスタンス化
-        // OrderSupportAgentは内部でシステムプロンプトを構築します
-        return new OrderSupportAgent(
+        // RouterAgentをインスタンス化
+        return new RouterAgent(
             $llm,
             $lookupOrderTool,
             $refundOrderTool,

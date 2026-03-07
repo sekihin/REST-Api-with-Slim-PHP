@@ -23,7 +23,7 @@ require __DIR__ . '/vendor/autoload.php';
 use App\Domain\Order\Order;
 use App\Domain\Order\OrderRepository;
 use App\Domain\Inventory\InventoryService;
-use App\Infrastructure\AI\Agents\OrderSupportAgent;
+use App\Infrastructure\AI\Agents\RouterAgent;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool; // 即使不用也要加载
 use App\Infrastructure\AI\Tools\CheckInventoryTool;

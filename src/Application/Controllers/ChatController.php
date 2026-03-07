@@ -68,7 +68,7 @@ class ChatController
 
         // 3. エージェントの生成
         // Factory内部で、LLMの設定や必要なツール (LookupOrder, Refund...) の注入が行われます。
-        $agent = $this->agentFactory->createOrderSupportAgent($userId);
+        $agent = $this->agentFactory->createRouterAgent($userId);
 
         // 4. 短期記憶（スライディングウィンドウ）のロード
         // Redisから直近N件の履歴を取得し、エージェントに注入します。
