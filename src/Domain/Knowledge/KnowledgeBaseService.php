@@ -4,31 +4,22 @@ declare(strict_types=1);
 
 namespace App\Domain\Knowledge;
 
-use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\RequestException;
 use Elastic\Elasticsearch\Client as ElasticsearchClient;
 use stdClass;
+use App\Domain\Knowledge\EmbeddingProviderInterface;
 
 class KnowledgeBaseService
 {
     private ElasticsearchClient $esClient;
-    private HttpClient $httpClient;
-    private string $doubaoApiKey;
+    private EmbeddingProviderInterface $embeddingProvider;
 
-    private const DOUBAO_HOST = "ark.cn-beijing.volces.com";
-    private const EMBEDDING_PATH = "/api/v3/embeddings/multimodal";
-    private const EMBEDDING_MODEL = "doubao-embedding-vision-250615";
     private const EMBEDDING_DIM = 2048;
     private const INDEX_NAME = "rag_documents";
 
-    public function __construct(ElasticsearchClient $esClient, string $doubaoApiKey)
+    public function __construct(ElasticsearchClient $esClient, EmbeddingProviderInterface $embeddingProvider)
     {
         $this->esClient = $esClient;
-        $this->doubaoApiKey = $doubaoApiKey;
-        $this->httpClient = new HttpClient([
-            'base_uri' => 'https://' . self::DOUBAO_HOST,
-            'timeout'  => 30.0,
-        ]);
+        $this->embeddingProvider = $embeddingProvider;
     }
 
     /**
@@ -85,49 +76,10 @@ class KnowledgeBaseService
     }
 
     /**
-     * 検索クエリをDoubao APIでベクトル化
+     * 検索クエリを埋め込みベクトルに変換
      */
     private function getEmbedding(string $text): array
     {
-        $text = trim($text);
-        if (empty($text)) {
-            return array_fill(0, self::EMBEDDING_DIM, 0.0);
-        }
-
-        try {
-            $payload = [
-                "model" => self::EMBEDDING_MODEL,
-                "input" => [["type" => "text", "text" => $text]]
-            ];
-
-            $response = $this->httpClient->post(self::EMBEDDING_PATH, [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $this->doubaoApiKey,
-                    'Content-Type'  => 'application/json; charset=utf-8'
-                ],
-                'json' => $payload
-            ]);
-
-            $result = json_decode($response->getBody()->getContents(), true);
-
-            if (isset($result["data"]["embedding"]) && is_array($result["data"]["embedding"])) {
-                $embedding = $result["data"]["embedding"];
-                $len = count($embedding);
-                
-                // 次元数の調整
-                if ($len > self::EMBEDDING_DIM) {
-                    return array_slice($embedding, 0, self::EMBEDDING_DIM);
-                } elseif ($len < self::EMBEDDING_DIM) {
-                    return array_merge($embedding, array_fill(0, self::EMBEDDING_DIM - $len, 0.0));
-                }
-                return $embedding;
-            }
-
-            return array_fill(0, self::EMBEDDING_DIM, 0.0);
-
-        } catch (RequestException $e) {
-            error_log("Doubao API Error: " . $e->getMessage());
-            return array_fill(0, self::EMBEDDING_DIM, 0.0);
-        }
+        return $this->embeddingProvider->getEmbedding($text);
     }
 }

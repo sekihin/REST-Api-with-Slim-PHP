@@ -74,7 +74,7 @@ class ChatController
         // Redisから直近N件の履歴を取得し、エージェントに注入します。
         // これにより、AIは文脈（コンテキスト）を理解して回答できるようになります。
         $contextMessages = $history->getMessages();
-        $agent->setMemory($contextMessages); 
+        $agent->addToChatHistory($contextMessages);
 
         // 5. 推論の実行（AIの思考プロセス + ツール実行）
         try {

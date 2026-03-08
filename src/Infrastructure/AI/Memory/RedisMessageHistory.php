@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\AI\Memory;
 
-use Neuron\Memory\MessageHistoryInterface;
-use Neuron\Memory\Message; // NeuronフレームワークのMessage値オブジェクト（仮定）
+use NeuronAI\Chat\Enums\MessageRole;
+use NeuronAI\Chat\Messages\AssistantMessage;
+use NeuronAI\Chat\Messages\Message;
+use NeuronAI\Chat\Messages\UserMessage;
 use Redis;
 
 /**
@@ -16,7 +18,7 @@ use Redis;
  * 3. スライディングウィンドウ (Sliding Window): LLMのトークン制限（コンテキスト長）を超えないよう、
  * 過去の全履歴ではなく「直近のN件」のみを抽出して提供する仕組みを実装しています。
  */
-class RedisMessageHistory implements MessageHistoryInterface
+class RedisMessageHistory
 {
     /** @var Redis Redisクライアントインスタンス */
     private Redis $redis;
@@ -82,7 +84,7 @@ class RedisMessageHistory implements MessageHistoryInterface
      * 会話履歴を取得する（スライディングウィンドウ適用）
      * * 全履歴ではなく、ウィンドウサイズで設定された「直近のN件」のみを返します。
      * これにより、LLMへのリクエストトークン量が爆発するのを防ぎます。
-     * * @return array<Message> Messageオブジェクトの配列
+     * * @return array<Message> NeuronAI Messageオブジェクトの配列
      */
     public function getMessages(): array
     {
@@ -99,9 +101,16 @@ class RedisMessageHistory implements MessageHistoryInterface
         foreach ($rawMessages as $json) {
             $data = json_decode($json, true);
             if ($data) {
-                // JSONデータをMessageオブジェクト（値オブジェクト）として再構築
-                // フレームワークの実装に合わせてインスタンス化します
-                $messages[] = new Message($data['role'], $data['content']);
+                $role = (string) ($data['role'] ?? 'user');
+                $content = $data['content'] ?? '';
+
+                $messages[] = match ($role) {
+                    MessageRole::USER->value => new UserMessage($content),
+                    MessageRole::ASSISTANT->value => new AssistantMessage($content),
+                    MessageRole::SYSTEM->value => new Message(MessageRole::SYSTEM, $content),
+                    MessageRole::DEVELOPER->value => new Message(MessageRole::DEVELOPER, $content),
+                    default => new Message(MessageRole::USER, $content),
+                };
             }
         }
 

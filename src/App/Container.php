@@ -18,17 +18,21 @@ use App\Infrastructure\Persistence\InMemoryOrderRepository;
 use App\Infrastructure\AI\Agents\RouterAgent;
 use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
-use App\Infrastructure\AI\Tools\RefundOrderTool;
+use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\CheckInventoryTool;
+use App\Infrastructure\AI\Tools\RefundOrderTool;
 use App\Infrastructure\AI\Tools\SearchManuaryTool;
 use App\Infrastructure\External\GeminiProvider;
 use App\Infrastructure\External\DeepSeekProvider;
+use App\Infrastructure\External\DoubaoProvider;
 use App\Infrastructure\External\DoubaoEmbeddingProvider;
 use App\Infrastructure\External\GeminiEmbeddingProvider;
 use App\Application\Controllers\ChatController;
 use App\Application\Controllers\OrderController;
 use App\Application\Controllers\InventoryController;
-use Neuron\Providers\LLM\LLMInterface;
+use App\Neuron\Agents\GeneralChatAgent;
+use NeuronAI\Providers\AIProviderInterface;
+use NeuronAI\Providers\OpenAILike;
 use Elastic\Elasticsearch\ClientBuilder;
 use Psr\Log\LoggerInterface;
 use Monolog\Logger; 
@@ -106,6 +110,13 @@ $container['db'] = function ($c) {
     return $pdo;
 };
 
+// DIコンテナにロガーとAgentを登録（セッションやユーザーごとの記憶を扱いやすくするため）
+$container['logger'] = function ($c) {
+    $logger = new Logger('chat');
+    $logger->pushHandler(new StreamHandler(__DIR__ . '/../logs/chat.log', Logger::DEBUG));
+    return $logger;
+};
+
 // --- 4. ドメイン & インフラストラクチャ層 ---
 
 // [リポジトリ層]
@@ -136,17 +147,24 @@ $container[InventoryController::class] = function ($c) {
 
 // --- 5. AIツール (Tools) ---
 // AIエージェントが使用する「手足」となる機能群です。
+$container[GeneralChatAgent::class] = function ($c) {
+    return new GeneralChatAgent($c['logger']);
+};
 
-// 注文検索ツール
+// 契約検索ツール
 $container[LookupOrderTool::class] = function ($c) {
     return new LookupOrderTool($c[OrderService::class]);
+};
+
+// 配送状況照会ツール（ルーターエージェント用）
+$container[CheckDeliveryTool::class] = function ($c) {
+    return new CheckDeliveryTool($c[OrderService::class]);
 };
 
 // 在庫確認ツール
 $container[CheckInventoryTool::class] = function ($c) {
     return new CheckInventoryTool($c[InventoryService::class]);
 };
-
 
 // 返金ツール (重要)
 // 金銭操作を含むため、OrderServiceだけでなくLoggerInterfaceも注入し、
@@ -179,7 +197,7 @@ $container['embedding_provider'] = function ($c) {
         case 'doubao':
         default:
             $apiKey = getenv('DOBAO_API_KEY') ?: throw new \Exception('Missing DOBAO_API_KEY for embedding');
-            return new DoubaoEmbeddingProvider($apiKey);
+            return new DoubaoEmbeddingProvider($apiKey, $c[LoggerInterface::class]);
     }
 };
 
@@ -201,10 +219,10 @@ $container[SearchManuaryTool::class] = function ($c) {
 
 // --- 6. AIエージェント & LLM (Brain) ---
 
-// LLMインターフェースの実装バインディング
+// AIプロバイダーインターフェースの実装バインディング
 // 環境変数 (LLM_PROVIDER) の値によって、インスタンス化するクラス（AIの脳）を動的に切り替えます。
 // これにより、ベンダーロックインを防ぎ、コストや性能に応じて柔軟にモデルを変更できます。
-$container[LLMInterface::class] = function ($c) {
+$container[AIProviderInterface::class] = function ($c) {
     // 1. プロバイダーの選択
     // 環境変数が設定されていない場合は、デフォルトで 'gemini' を採用します。
     $provider = getenv('LLM_PROVIDER') ?: 'gemini';
@@ -212,7 +230,7 @@ $container[LLMInterface::class] = function ($c) {
     // ケースA: Google Gemini を使用する場合
     if ($provider === 'gemini') {
         // APIキーの取得と検証 (Fail Fast: キーがない場合は即座に例外を投げて停止)
-        $apiKey = getenv('GEMINI_API_KEY') ?: throw new \Exception('Missing GEMINI_API_KEY');
+        $apiKey = getenv('GEMINI_API_KEY') ?: throw new \Exception('Missing GEMINI_API_KEY 123');
         
         return new GeminiProvider(
             apiKey: $apiKey,
@@ -226,11 +244,10 @@ $container[LLMInterface::class] = function ($c) {
             // 創造性を少し残しつつも、事実に基づいた回答を安定して出力させるための設定です。
             temperature: 0.3
         );
-    } 
-    
-    // ケースB: DeepSeek を使用する場合 (フォールバック)
-    // 中国語の処理能力が高く、APIコストが安いため、代替案として優秀です。
-    else {
+    }
+
+    // ケースB: DeepSeek を使用する場合
+    if ($provider === 'deepseek') {
         $apiKey = getenv('DEEPSEEK_API_KEY') ?: throw new \Exception('Missing DEEPSEEK_API_KEY');
         
         return new DeepSeekProvider(
@@ -242,21 +259,47 @@ $container[LLMInterface::class] = function ($c) {
             temperature: 0.1 
         );
     }
+
+    // ケースC: Doubao (豆包) を使用する場合
+    if ($provider === 'doubao') {
+        $apiKey = getenv('DOBAO_API_KEY') ?: throw new \Exception('Missing DOBAO_API_KEY');
+
+        // Volcengine Ark の OpenAI 互換エンドポイントに接続（/api/v3/chat/completions）
+        // NeuronAI は OpenAI互換の Provider を想定しているため、OpenAILike を使う
+        return new OpenAILike(
+            baseUri: 'https://ark.cn-beijing.volces.com/api/v3',
+            key: $apiKey,
+            model: getenv('DOUBAO_CHAT_MODEL') ?: 'doubao-seed-2-0-mini-260215',
+            parameters: [
+                'temperature' => 0.5,
+                'max_tokens' => 2048,
+                'stream' => false,
+            ],
+            strict_response: false,
+            httpOptions: null
+        );
+    }
+
+    // 不明なプロバイダーが指定された場合は例外を投げて明示的に失敗させる
+    throw new \InvalidArgumentException("Unsupported LLM_PROVIDER: {$provider}");
 };
 
 // ルーターエージェント本体
 $container[RouterAgent::class] = function ($c) {
     return new RouterAgent(
-        $c[LLMInterface::class],
+        $c[AIProviderInterface::class],
         $c[LookupOrderTool::class],
-        $c[RefundOrderTool::class],
-        $c[CheckInventoryTool::class]
+        $c[CheckDeliveryTool::class],
+        $c[SearchManuaryTool::class]
     );
 };
 
 // AgentFactory
 $container[AgentFactory::class] = function ($c) {
-    return new AgentFactory($c);
+    // AgentFactory は PSR-11 の ContainerInterface を要求するため、
+    // Pimple コンテナを Psr11Container でラップして渡す
+    $psrContainer = new Psr11Container($c);
+    return new AgentFactory($psrContainer);
 };
 
 // Redis接続

@@ -6,6 +6,7 @@ namespace App\Infrastructure\Persistence;
 
 use App\Domain\Order\Order;
 use App\Domain\Order\OrderRepository;
+use DateTimeImmutable;
 
 /**
  * インメモリ注文リポジトリ
@@ -32,6 +33,7 @@ class InMemoryOrderRepository implements OrderRepository
                 'ORD-2023-001',
                 '出荷済み', // ステータス: 出荷済み
                 299.00,   // 合計金額
+                new DateTimeImmutable('2023-01-15 10:00:00'), // 注文日時
                 [
                     // 商品: ワイヤレスマウス
                     ['name' => 'ワイヤレスマウス', 'quantity' => 1, 'price' => 59.00],
@@ -44,6 +46,7 @@ class InMemoryOrderRepository implements OrderRepository
                 'ORD-2023-002',
                 '準備中', // ステータス: 処理中
                 8999.00,
+                new DateTimeImmutable('2023-02-01 15:30:00'),
                 [
                     // 商品: ゲーミングノートPC
                     ['name' => 'ゲーミングノートPC', 'quantity' => 1, 'price' => 8999.00],
