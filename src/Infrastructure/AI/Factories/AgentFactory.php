@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Infrastructure\AI\Factories;
 
 use App\Infrastructure\AI\Agents\RouterAgent;
-use Neuron\Providers\LLM\LLMInterface;
+use NeuronAI\Providers\AIProviderInterface;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
-use App\Infrastructure\AI\Tools\RefundOrderTool;
-use App\Infrastructure\AI\Tools\CheckInventoryTool;
+use App\Infrastructure\AI\Tools\CheckDeliveryTool;
+use App\Infrastructure\AI\Tools\SearchManuaryTool;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -40,17 +40,17 @@ class AgentFactory
     public function createRouterAgent(string $userId): RouterAgent
     {
         // DIコンテナから必要な依存関係を取得
-        $llm = $this->container->get(LLMInterface::class);
+        $llm = $this->container->get(AIProviderInterface::class);
         $lookupOrderTool = $this->container->get(LookupOrderTool::class);
-        $refundOrderTool = $this->container->get(RefundOrderTool::class);
-        $checkInventoryTool = $this->container->get(CheckInventoryTool::class);
+        $checkDeliveryTool = $this->container->get(CheckDeliveryTool::class);
+        $searchFaqTool = $this->container->get(SearchManuaryTool::class);
 
         // RouterAgentをインスタンス化
         return new RouterAgent(
             $llm,
             $lookupOrderTool,
-            $refundOrderTool,
-            $checkInventoryTool
+            $checkDeliveryTool,
+            $searchFaqTool
         );
     }
 }

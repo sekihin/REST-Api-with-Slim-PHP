@@ -7,4 +7,4 @@ $dotenv = Dotenv\Dotenv::createUnsafeImmutable($baseDir);
 if (file_exists($baseDir . '.env')) {
     $dotenv->load();
 }
-$dotenv->required(['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASS', 'DB_PORT', 'DEEPSEEK_API_KEY']);
+$dotenv->required(['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASS', 'DB_PORT','DOBAO_API_KEY', 'DEEPSEEK_API_KEY', 'EMBEDDING_MODEL']);

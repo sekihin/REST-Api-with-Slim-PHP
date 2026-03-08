@@ -8,28 +8,33 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use Neuron\Providers\LLM\LLMInterface;
+use NeuronAI\Providers\AIProviderInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
 /**
- * Google Gemini Provider
- * * Google Generative Language API (v1beta) 用のアダプタークラスです。
- * * 役割: アプリケーション内で統一されたOpenAI形式のメッセージ/ツール定義を、
- * * Gemini特有のJSON構造に変換して送信し、レスポンスを再びOpenAI形式に戻します。
+ * Google Gemini 統合プロバイダー
+ *
+ * - LLMチャット（function calling / tool対応）
+ * - Text Embeddings 生成
+ *
+ * NeuronAIのAIProviderInterfaceを実装しつつ、RAG用途のembeddingsも提供。
+ * 公式Geminiプロバイダーが要件を満たさない場合のカスタム実装として使用。
  */
-class GeminiProvider implements LLMInterface
+class GeminiProvider implements AIProviderInterface
 {
     private Client $httpClient;
-    private string $model;
-    private LoggerInterface $logger;
+    private string $apiKey;
+    private string $chatModel;
     private float $temperature;
     private int $timeout;
     private int $maxRetries;
+    private LoggerInterface $logger;
 
-    // Gemini APIのエンドポイント (v1beta)
-    private const BASE_URI = 'https://generativelanguage.googleapis.com/v1beta/models/';
+    private const CHAT_BASE_URI    = 'https://generativelanguage.googleapis.com/v1beta/models/';
+    private const EMBEDDING_PATH   = '/v1beta/models/embedding-001:embedContent';
+    private const EMBEDDING_DIM    = 768; // embedding-001 の次元数（2026年現在）
 
     /**
      * コンストラクタ
@@ -43,23 +48,19 @@ class GeminiProvider implements LLMInterface
     public function __construct(
         string $apiKey,
         LoggerInterface $logger,
-        string $model = 'gemini-1.5-flash', 
+        string $chatModel = 'gemini-1.5-flash',
         float $temperature = 0.5,
         int $timeout = 60,
         int $maxRetries = 3
     ) {
-        $this->model = $model;
-        $this->logger = $logger;
+        $this->apiKey     = $apiKey;
+        $this->chatModel  = $chatModel;
+        $this->logger     = $logger;
         $this->temperature = $temperature;
-        $this->timeout = $timeout;
+        $this->timeout    = $timeout;
         $this->maxRetries = $maxRetries;
 
-        // Guzzleクライアントの初期化
-        // Gemini APIは 'Authorization: Bearer' ではなく 'x-goog-api-key' ヘッダーを使用します。
-        // DeepSeekProvider 同様、HandlerStack + Retry ミドルウェアを使って一時的なエラーに強くします。
-
         $handlerStack = HandlerStack::create();
-
         $handlerStack->push(Middleware::retry(
             function (
                 int $retries,
@@ -70,47 +71,26 @@ class GeminiProvider implements LLMInterface
                 if ($retries >= $this->maxRetries) {
                     return false;
                 }
-
-                // 5xx は再試行
-                if ($response !== null && $response->getStatusCode() >= 500) {
-                    $this->logger->warning('Gemini retry due to 5xx response', [
-                        'status' => $response->getStatusCode(),
-                        'retries' => $retries,
-                        'uri' => (string)$request->getUri(),
-                    ]);
+                if ($response && $response->getStatusCode() >= 500) {
                     return true;
                 }
-
-                // タイムアウトや一時的なネットワークエラーも再試行対象
-                if ($exception !== null) {
-                    $this->logger->warning('Gemini retry due to transport exception', [
-                        'error' => $exception->getMessage(),
-                        'retries' => $retries,
-                        'uri' => (string)$request->getUri(),
-                    ]);
-                    return true;
-                }
-
-                return false;
+                return $exception !== null;
             },
-            function (int $retries): int {
-                // シンプルな線形バックオフ（ms）
-                return 500 * $retries;
-            }
+            fn(int $retries): int => 500 * $retries
         ));
 
         $this->httpClient = new Client([
-            'handler' => $handlerStack,
-            'base_uri' => self::BASE_URI,
-            'timeout'  => $this->timeout,
+            'handler'         => $handlerStack,
+            'timeout'         => $this->timeout,
             'connect_timeout' => 10,
-            'http_errors' => false, // ステータスコード検証は自前で行う
-            'headers'  => [
+            'http_errors'     => false,
+            'headers'         => [
                 'Content-Type' => 'application/json',
-                'x-goog-api-key' => $apiKey,
             ],
         ]);
     }
+
+    // ── AIProviderInterface 実装（チャット部分） ───────────────────────────────────────
 
     /**
      * チャットリクエストの送信
@@ -123,101 +103,55 @@ class GeminiProvider implements LLMInterface
         // Geminiは独立したフィールド `system_instruction` として扱う必要があります。
         $systemInstruction = null;
         $geminiContents = [];
-        
+
         foreach ($messages as $msg) {
             if ($msg['role'] === 'system') {
                 $systemInstruction = ['parts' => ['text' => $msg['content']]];
             } else {
-                // User/Assistant/Tool メッセージの変換
                 $geminiContents[] = $this->formatMessage($msg);
             }
         }
 
         // 2. ツールの変換
         // OpenAI (JSON Schema) -> Gemini (Function Declaration)
-        $geminiTools = [];
-        if (!empty($tools)) {
-            $geminiTools = $this->formatTools($tools);
-        }
+        $geminiTools = $this->formatTools($tools);
 
         // 3. リクエストペイロードの構築
         $payload = [
             'contents' => $geminiContents,
             'generationConfig' => [
                 'temperature' => $this->temperature,
-                // Geminiには max_tokens パラメータは必須ではありません（強制的に切りたい場合のみ指定）
-            ]
+        // Geminiには max_tokens パラメータは必須ではありません（強制的に切りたい場合のみ指定）
+            ],
         ];
 
-        // システムプロンプトがあれば追加
+    // システムプロンプトがあれば追加
         if ($systemInstruction) {
             $payload['system_instruction'] = $systemInstruction;
         }
 
-        // ツールがあれば追加 (Geminiは tools 配列の中に function_declarations をラップする構造)
+    // ツールがあれば追加 (Geminiは tools 配列の中に function_declarations をラップする構造)
         if (!empty($geminiTools)) {
-            $payload['tools'] = [$geminiTools]; 
+            $payload['tools'] = [$geminiTools];
         }
 
         try {
-            $this->logger->debug('Gemini Request Payload', [
-                'model' => $this->model,
-                'payload' => json_encode($payload),
-                'timeout' => $this->timeout,
-                'max_retries' => $this->maxRetries,
-            ]);
 
             // 4. APIリクエスト送信
             // エンドポイント形式: models/{model}:generateContent
-            $response = $this->httpClient->post("{$this->model}:generateContent", [
-                'json' => $payload
+            $response = $this->httpClient->post(self::CHAT_BASE_URI . "{$this->chatModel}:generateContent", [
+                'headers' => ['x-goog-api-key' => $this->apiKey],
+                'json'    => $payload,
             ]);
 
-            $statusCode = $response->getStatusCode();
-            $rawBody = (string)$response->getBody();
+        // レスポンスボディの取得とJSONデコード
+            $body = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-            // ステータスコード検証（4xx/5xx はエラー扱い）
-            if ($statusCode < 200 || $statusCode >= 300) {
-                $this->logger->error('Gemini API non-success response', [
-                    'status' => $statusCode,
-                    'body' => mb_substr($rawBody, 0, 1000), // ログサイズを制限
-                ]);
-                throw new \RuntimeException(sprintf(
-                    'Gemini API returned non-success status code: %d',
-                    $statusCode
-                ));
-            }
-
-            // レスポンスボディの取得とJSONデコード
-            try {
-                $body = json_decode($rawBody, true, 512, JSON_THROW_ON_ERROR);
-            } catch (\JsonException $e) {
-                $this->logger->error('Gemini API response parsing failed', [
-                    'error' => $e->getMessage(),
-                    'body' => mb_substr($rawBody, 0, 1000),
-                ]);
-                throw new \RuntimeException('Gemini API response parsing failed: ' . $e->getMessage(), 0, $e);
-            }
-            
-            // 5. レスポンスの解析とOpenAI形式への逆変換
             return $this->parseResponse($body);
-
-        } catch (GuzzleException $e) {
-            // Googleの詳細なエラー情報を取得してログに残す
-            $context = [
-                'error' => $e->getMessage(),
-            ];
-
-            if (method_exists($e, 'getRequest') && $e->getRequest() !== null) {
-                $context['request_uri'] = (string)$e->getRequest()->getUri();
-            }
-            if (method_exists($e, 'getResponse') && $e->getResponse() !== null) {
-                $context['status'] = $e->getResponse()->getStatusCode();
-                $context['response_body'] = mb_substr((string)$e->getResponse()->getBody(), 0, 1000);
-            }
-
-            $this->logger->error('Gemini API transport error', $context);
-            throw new \RuntimeException('Gemini API request failed: ' . $e->getMessage(), 0, $e);
+        } catch (GuzzleException | \JsonException $e) {
+        // Googleの詳細なエラー情報を取得してログに残す
+            $this->logger->error('Gemini chat request failed', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('Gemini chat failed', 0, $e);
         }
     }
 
@@ -228,10 +162,9 @@ class GeminiProvider implements LLMInterface
     private function formatMessage(array $msg): array
     {
         // Roleのマッピング: OpenAI 'assistant' -> Gemini 'model'
-        $role = ($msg['role'] === 'assistant') ? 'model' : 'user';
+        $role = $msg['role'] === 'assistant' ? 'model' : 'user';
         $parts = [];
 
-        // テキストコンテンツの処理
         if (!empty($msg['content'])) {
             $parts[] = ['text' => $msg['content']];
         }
@@ -243,7 +176,7 @@ class GeminiProvider implements LLMInterface
                 $parts[] = [
                     'functionCall' => [
                         'name' => $call['function']['name'],
-                        'args' => json_decode($call['function']['arguments'], true)
+                        'args' => json_decode($call['function']['arguments'], true) ?? [
                     ]
                 ];
             }
@@ -253,23 +186,20 @@ class GeminiProvider implements LLMInterface
         // OpenAI 'tool' role -> Gemini 'functionResponse'
         if ($msg['role'] === 'tool') {
             // Gemini REST APIでは、ツールの実行結果は 'user' ロールの一部として送信します。
-            $role = 'user'; 
+            $role = 'user';
             $parts = [[
                 'functionResponse' => [
-                    'name' => $msg['name'], // どの関数の結果かを指定
+                    'name' => $msg['name'] ?? 'tool',  // どの関数の結果かを指定
                     'response' => [
-                        'name' => $msg['name'],
+                        'name' => $msg['name'] ?? 'tool',
                         // Geminiのargs/contentはオブジェクトである必要があります
-                        'content' => json_decode($msg['content'], true) 
+                        'content' => json_decode($msg['content'] ?? '{}', true) ?? []
                     ]
                 ]
             ]];
         }
 
-        return [
-            'role' => $role,
-            'parts' => $parts
-        ];
+        return ['role' => $role, 'parts' => $parts];
     }
 
     /**
@@ -280,16 +210,14 @@ class GeminiProvider implements LLMInterface
         $declarations = [];
         foreach ($tools as $tool) {
             if ($tool['type'] !== 'function') continue;
-            
             $func = $tool['function'];
             $declarations[] = [
-                'name' => $func['name'],
+                'name'        => $func['name'],
                 'description' => $func['description'] ?? '',
                 // Geminiは標準的なJSON Schemaをサポートしているため、parametersはそのまま流用可能
-                'parameters' => $func['parameters'] 
+                'parameters'  => $func['parameters'] ?? ['type' => 'object', 'properties' => []]
             ];
         }
-        
         return ['function_declarations' => $declarations];
     }
 
@@ -300,31 +228,29 @@ class GeminiProvider implements LLMInterface
     private function parseResponse(array $body): array
     {
         $candidate = $body['candidates'][0] ?? [];
-        $content = $candidate['content'] ?? [];
-        $parts = $content['parts'] ?? [];
+        $parts = $candidate['content']['parts'] ?? [];
 
         $result = [
-            'role' => 'assistant',
-            'content' => null, // テキスト結合用
-            'tool_calls' => [] // ツール呼び出し格納用
+            'role'       => 'assistant',
+            'content'    => null, // テキスト結合用
+            'tool_calls' => [], // ツール呼び出し格納用
         ];
 
         foreach ($parts as $part) {
-            // テキスト部分の抽出
+             // テキスト部分の抽出
             if (isset($part['text'])) {
-                $result['content'] .= $part['text'];
+                $result['content'] .= ($result['content'] ? ' ' : '') . $part['text'];
             }
-
             // 関数呼び出し部分の抽出
             if (isset($part['functionCall'])) {
                 $result['tool_calls'][] = [
                     // OpenAI形式には一意なIDが必要ですが、GeminiはIDを返さないためダミーを生成します
-                    'id' => 'call_' . uniqid(), 
-                    'type' => 'function',
+                    'id'       => 'call_' . uniqid(),
+                    'type'     => 'function',
                     'function' => [
-                        'name' => $part['functionCall']['name'],
+                        'name'      => $part['functionCall']['name'],
                         // 引数をJSON文字列に戻す
-                        'arguments' => json_encode($part['functionCall']['args'])
+                        'arguments' => json_encode($part['functionCall']['args'] ?? [])
                     ]
                 ];
             }
@@ -333,11 +259,57 @@ class GeminiProvider implements LLMInterface
         // 安全フィルター (Safety Settings) 等でブロックされた場合の処理
         // コンテンツもツール呼び出しも空の場合、ブロックされた可能性が高いです。
         if (empty($result['content']) && empty($result['tool_calls'])) {
-            $finishReason = $candidate['finishReason'] ?? 'UNKNOWN';
-            $this->logger->warning("Gemini returned empty content. Finish Reason: {$finishReason}");
-            $result['content'] = "[System: Geminiの安全ポリシーにより応答がブロックされました (理由: {$finishReason})]";
+            $reason = $candidate['finishReason'] ?? 'UNKNOWN';
+            $result['content'] = "[Gemini safety block: {$reason}]";
+            $this->logger->warning("Gemini response blocked", ['reason' => $reason]);
         }
 
         return $result;
+    }
+
+    // ── Embeddings 機能（RAG用） ──────────────────────────────────────────────────────
+
+    /**
+     * テキストをGemini embeddingモデルでベクトル化
+     * @param string $text
+     * @return array<float> 768次元ベクトル（失敗時はゼロ埋め）
+     */
+    public function getEmbedding(string $text): array
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        }
+
+        try {
+            $payload = [
+                'model'   => 'models/embedding-001',
+                'content' => ['parts' => [['text' => $text]]],
+            ];
+
+            $response = $this->httpClient->post(self::EMBEDDING_PATH, [
+                'query'   => ['key' => $this->apiKey],
+                'json'    => $payload,
+            ]);
+
+            $data = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+            $embedding = $data['embedding']['values'] ?? [];
+            $len = count($embedding);
+
+            if ($len === self::EMBEDDING_DIM) {
+                return $embedding;
+            }
+
+            // 次元調整（稀だが安全策）
+            if ($len > self::EMBEDDING_DIM) {
+                return array_slice($embedding, 0, self::EMBEDDING_DIM);
+            }
+            return array_merge($embedding, array_fill(0, self::EMBEDDING_DIM - $len, 0.0));
+
+        } catch (\Throwable $e) {
+            $this->logger->error('Gemini embedding failed', ['error' => $e->getMessage(), 'text_length' => strlen($text)]);
+            return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        }
     }
 }

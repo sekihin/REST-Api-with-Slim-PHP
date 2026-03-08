@@ -32,7 +32,6 @@ $errorMiddleware->setDefaultErrorHandler($customErrorHandler);
 // (require __DIR__ . '/Database.php');
 
 (require __DIR__ . '/Services.php');
-(require __DIR__ . '/Repositories.php');
 (require __DIR__ . '/Routes.php')($app);
 (require __DIR__ . '/NotFound.php')($app);
 
