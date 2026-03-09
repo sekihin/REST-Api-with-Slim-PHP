@@ -8,6 +8,8 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Infrastructure\AI\Memory\RedisMessageHistory;
+use App\Neuron\Agents\GeneralChatAgent;
+use Psr\Log\LoggerInterface;
 use Redis;
 
 /**
@@ -20,16 +22,25 @@ class ChatController
 {
     private AgentFactory $agentFactory;
     private Redis $redis;
+    private GeneralChatAgent $generalChatAgent;
+    private LoggerInterface $logger;
 
     /**
      * コンストラクタ
      * * @param AgentFactory $agentFactory 設定済みのエージェントを生成するファクトリ
      * * @param Redis        $redis        会話履歴を保存するためのRedisインスタンス
      */
-    public function __construct(AgentFactory $agentFactory, Redis $redis)
+    public function __construct(
+        AgentFactory $agentFactory,
+        Redis $redis,
+        GeneralChatAgent $generalChatAgent,
+        LoggerInterface $logger
+    )
     {
         $this->agentFactory = $agentFactory;
         $this->redis = $redis;
+        $this->generalChatAgent = $generalChatAgent;
+        $this->logger = $logger;
     }
 
     /**
@@ -115,6 +126,45 @@ class ChatController
             
             $response->getBody()->write($payload);
             return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+        }
+    }
+
+    /**
+     * DeepSeek 一般チャット用エンドポイントロジック
+     * 元々は Routes.php 内の /agent/deepseek/chat に直接定義されていたものを
+     * コントローラークラスへ移動した実装です。
+     *
+     * 現時点ではルート定義からは切り離されており、必要に応じて
+     * ルーティング側からこのメソッドを呼び出す形で再利用できます。
+     */
+    public function deepseekChat(Request $request, Response $response): Response
+    {
+        $data = $request->getParsedBody();
+        $userMessage = trim($data['message'] ?? '');
+
+        if (empty($userMessage)) {
+            $response->getBody()->write(json_encode(['error' => 'メッセージを入力してください']));
+            return $response
+                ->withHeader('Content-Type', 'application/json')
+                ->withStatus(400);
+        }
+
+        try {
+            $result = $this->generalChatAgent->chat($userMessage);
+            $reply = $result->content ?? '…ごめん、ちょっとわかんないかも';
+
+            $response->getBody()->write(json_encode([
+                'reply'   => $reply,
+                'success' => true,
+            ]));
+
+            return $response->withHeader('Content-Type', 'application/json');
+        } catch (\Throwable $e) {
+            $this->logger->error('Chat error: ' . $e->getMessage());
+            $response->getBody()->write(json_encode(['error' => 'エラーが発生しました']));
+            return $response
+                ->withStatus(500)
+                ->withHeader('Content-Type', 'application/json');
         }
     }
 }

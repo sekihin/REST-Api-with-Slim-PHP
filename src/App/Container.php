@@ -315,7 +315,9 @@ $container[\Redis::class] = function ($c) {
 $container[ChatController::class] = function ($c) {
     return new ChatController(
         $c[AgentFactory::class],
-        $c[\Redis::class]
+        $c[\Redis::class],
+        $c[GeneralChatAgent::class],
+        $c[LoggerInterface::class]
     );
 };
 
