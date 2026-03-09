@@ -123,6 +123,7 @@ return function (App $app) {
         $queryParams = $request->getQueryParams();
         $bodyParams  = $request->getParsedBody() ?? [];
 
+        // 1. User Message: リクエストからユーザーメッセージを取得
         $userMessage =
             $bodyParams['message']
                 ?? $queryParams['message']
@@ -131,8 +132,8 @@ return function (App $app) {
             return $customResponse->withJson(['status' => 'error', 'message' => 'No message provided'], 400);
         }
 
-        // --- Pre-Process Node (RAG 用クエリ正規化) ---
-        // トリム・連続空白の正規化。必要に応じてクエリ書き換えや意図の正規化をここに追加可能。
+        // 2. Pre-Process Node (RAG 用クエリ正規化)
+        //    トリム・連続空白の正規化。必要に応じてクエリ書き換えや意図の正規化をここに追加可能。
         $preprocessedMessage = trim(preg_replace('/\s+/u', ' ', (string) $userMessage));
         if ($preprocessedMessage === '') {
             return $customResponse->withJson(['status' => 'error', 'message' => 'Message is empty after preprocessing'], 400);
@@ -164,17 +165,20 @@ return function (App $app) {
         );
     });      
 
-        // メッセージを受け取るテスト用チャットエンドポイント
+    // メッセージを受け取るテスト用チャットエンドポイント
     // URL 例:
-    //   GET /agent/doubao/step3/?message=こんにちは
-    //   POST /agent/doubao/step3  body: { "message": "こんにちは" } または message=...
+    //   GET /agent/doubao/step4/?message=こんにちは
+    //   POST /agent/doubao/step4  body: { "message": "こんにちは" } または message=...
     // RAG Workflow:
     //   1. User Message
     //   2. Pre-Process Node (クエリ正規化)
     //   3. Retrieval Node (KnowledgeBaseService でベクトル検索)
     //   4. Post-Process Node (検索結果のテキスト整形)
     //   5. Enrich Instructions Node (RouterAgent のシステムプロンプトへ注入)
-    $app->map(['GET', 'POST'], '/agent/doubao/step3', function (Request $request, Response $response) use ($app) {
+    //   6. Chat Node (RouterAgent による応答生成)
+    //   7. Tool Node (RouterAgent 内で LookupOrder / CheckDelivery / SearchFaq ツール呼び出し)
+    //   8. Assistant Message (HTTP レスポンス JSON としてクライアントへ返却)
+    $app->map(['GET', 'POST'], '/agent/doubao/step4', function (Request $request, Response $response) use ($app) {
         $customResponse = new CustomResponse();
 
         $queryParams = $request->getQueryParams();
@@ -195,7 +199,7 @@ return function (App $app) {
             return $customResponse->withJson(['status' => 'error', 'message' => 'Message is empty after preprocessing'], 400);
         }
 
-        // --- Retrieval Node: ナレッジベース検索 ---
+        // 3. Retrieval Node: ナレッジベース検索
         $knowledgeContext = '';
         try {
             $container = $app->getContainer();
@@ -203,7 +207,7 @@ return function (App $app) {
             $kbService = $container->get(KnowledgeBaseService::class);
             $kbResults = $kbService->searchDocuments($preprocessedMessage, 3);
 
-            // --- Post-Process Node: 検索結果のテキスト整形 ---
+            // 4. Post-Process Node: 検索結果のテキスト整形
             if (!empty($kbResults)) {
                 $lines = [];
                 $lines[] = "以下は社内ナレッジベースから取得した関連情報です。内容を参考にして、ユーザーの質問に一貫性のある回答を行ってください。";
@@ -223,7 +227,7 @@ return function (App $app) {
             // （本番では LoggerInterface を使って記録することを推奨）
         }
 
-        // --- RouterAgent で実行 (Enrich Instructions Node を含む) ---
+        // 5. Enrich Instructions Node: RouterAgent のシステムプロンプトへナレッジを注入
         try {
             $container = $app->getContainer();
             /** @var AgentFactory $agentFactory */
@@ -231,11 +235,13 @@ return function (App $app) {
             $agent = $agentFactory->createRouterAgent('guest');
 
             if ($knowledgeContext !== '') {
+                // 5-1. RAG で構築した Knowledge Context を RouterAgent に付与
                 $agent->withKnowledgeContext($knowledgeContext);
             }
 
+            // 6. Chat Node: RouterAgent による応答生成（内部でツール呼び出しも行われうる）
             $result = $agent->run($preprocessedMessage);
-            $replyContent = $result->getContent();
+            $replyContent = $result->getContent(); // Message オブジェクトからアシスタントメッセージ本文を取得
         } catch (\Throwable $e) {
             return $customResponse->withJson([
                 'status'  => 'error',
@@ -243,6 +249,7 @@ return function (App $app) {
             ], 500, JSON_UNESCAPED_UNICODE);
         }
 
+        // 8. Assistant Message: HTTP レスポンス JSON としてクライアントへ返却
         return $customResponse->withJson(
             [
                 'status'   => 'ok',
@@ -254,38 +261,6 @@ return function (App $app) {
             JSON_UNESCAPED_UNICODE
         );
     }); 
-
-    // シンプルなPOST /chat エンドポイント（JSONで会話）
-    $app->post('/agent/deepseek', function (Request $request, Response $response) {
-        $data = $request->getParsedBody();
-        $userMessage = trim($data['message'] ?? '');
-
-        if (empty($userMessage)) {
-            $response->getBody()->write(json_encode(['error' => 'メッセージを入力してください']));
-            return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-        }
-
-        /** @var GeneralChatAgent $agent */
-        $agent = $this->get(GeneralChatAgent::class);
-
-        try {
-            $result = $agent->chat($userMessage);  // Neuron AIのchat()メソッド（文字列入力対応版）
-
-            $reply = $result->content ?? '…ごめん、ちょっとわかんないかも';
-
-            $response->getBody()->write(json_encode([
-                'reply' => $reply,
-                'success' => true
-            ]));
-
-        } catch (\Throwable $e) {
-            $this->get('logger')->error('Chat error: ' . $e->getMessage());
-            $response->getBody()->write(json_encode(['error' => 'エラーが発生しました']));
-            return $response->withStatus(500);
-        }
-
-        return $response->withHeader('Content-Type', 'application/json');
-    });
 
     // APIルートグループ
     // 全てのルートは '/api' プレフィックスを持ちます。
