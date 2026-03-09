@@ -40,7 +40,7 @@ class KnowledgeBaseService
                     'script_score' => [
                         'query'  => ['match_all' => new stdClass()],
                         'script' => [
-                            'source' => "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                            'source' => "double score = cosineSimilarity(params.query_vector, 'embedding'); if (Double.isNaN(score) || Double.isInfinite(score)) { score = 0.0; } return score + 1.0;",
                             'params' => ['query_vector' => $queryVector]
                         ]
                     ]
