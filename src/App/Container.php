@@ -10,6 +10,7 @@ use App\App\ResponseFactory as CustomResponseFactory;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Bayfront\MonologPDO\PDOHandler; 
+use App\Infrastructure\Logging\DatabaseHandler;
 use App\Domain\Order\OrderRepository;
 use App\Domain\Order\OrderService;
 use App\Domain\Inventory\InventoryService;
@@ -28,6 +29,7 @@ use App\Infrastructure\External\DoubaoProvider;
 use App\Infrastructure\External\DoubaoEmbeddingProvider;
 use App\Infrastructure\External\GeminiEmbeddingProvider;
 use App\Application\Controllers\ChatController;
+use App\Application\Controllers\RagController;
 use App\Application\Controllers\OrderController;
 use App\Application\Controllers\InventoryController;
 use App\Neuron\Agents\GeneralChatAgent;
@@ -95,7 +97,7 @@ $container[LoggerInterface::class] = function ($c) {
 
 $container['db'] = function ($c) {
     $dsn = sprintf(
-        'mysql:host=%s;dbname=%s;port=%s;charset=utf8',
+        'mysql:host=%s;dbname=%s;port=%s;charset=utf8mb4',
         getenv('DB_HOST'), getenv('DB_NAME'), getenv('DB_PORT')
     );
     
@@ -113,7 +115,43 @@ $container['db'] = function ($c) {
 // DIコンテナにロガーとAgentを登録（セッションやユーザーごとの記憶を扱いやすくするため）
 $container['logger'] = function ($c) {
     $logger = new Logger('chat');
-    $logger->pushHandler(new StreamHandler(__DIR__ . '/../logs/chat.log', Logger::DEBUG));
+
+    // DBへ保存（テーブル: c_logs）
+    $logger->pushHandler(new DatabaseHandler($c['db'], 'c_logs', Logger::DEBUG));
+
+    // リクエスト情報を自動付与（利用可能な場合）
+    $logger->pushProcessor(function ($record) use ($c) {
+        try {
+            if (!isset($c['request'])) {
+                return $record;
+            }
+            $req = $c['request'];
+
+            $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? null;
+            $userAgent = method_exists($req, 'getHeaderLine') ? $req->getHeaderLine('User-Agent') : null;
+            $requestUri = method_exists($req, 'getUri') ? (string)$req->getUri() : null;
+
+            if ($record instanceof \Monolog\LogRecord) {
+                $ctx = $record->context;
+                $ctx['remote_addr'] = $ctx['remote_addr'] ?? $remoteAddr;
+                $ctx['user_agent'] = $ctx['user_agent'] ?? $userAgent;
+                $ctx['request_uri'] = $ctx['request_uri'] ?? $requestUri;
+                return $record->with(context: $ctx);
+            }
+
+            if (is_array($record)) {
+                $record['context'] = $record['context'] ?? [];
+                $record['context']['remote_addr'] = $record['context']['remote_addr'] ?? $remoteAddr;
+                $record['context']['user_agent'] = $record['context']['user_agent'] ?? $userAgent;
+                $record['context']['request_uri'] = $record['context']['request_uri'] ?? $requestUri;
+                return $record;
+            }
+        } catch (\Throwable $e) {
+            // ロガー自体の例外でアプリを落とさない
+        }
+        return $record;
+    });
+
     return $logger;
 };
 
@@ -302,8 +340,13 @@ $container[AgentFactory::class] = function ($c) {
     return new AgentFactory($psrContainer);
 };
 
-// Redis接続
+// Redis接続（php-redis 拡張が必要。未導入時は /api/chat 利用時にエラーになります）
 $container[\Redis::class] = function ($c) {
+    if (!class_exists(\Redis::class, false)) {
+        throw new \RuntimeException(
+            'PHP Redis extension is required for chat history. Install php-redis and enable extension=redis in php.ini.'
+        );
+    }
     $redis = new \Redis();
     $redisHost = getenv('REDIS_HOST') ?: 'localhost';
     $redisPort = (int)(getenv('REDIS_PORT') ?: 6379);
@@ -318,6 +361,14 @@ $container[ChatController::class] = function ($c) {
         $c[\Redis::class],
         $c[GeneralChatAgent::class],
         $c[LoggerInterface::class]
+    );
+};
+
+// RagController（RAG/step4 は Redis 未使用）
+$container[RagController::class] = function ($c) {
+    return new RagController(
+        $c[AgentFactory::class],
+        $c[KnowledgeBaseService::class]
     );
 };
 
