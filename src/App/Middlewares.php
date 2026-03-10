@@ -15,31 +15,28 @@ return static function (App $app, $customErrorHandler = null): void {
     $app->addRoutingMiddleware();
     $app->addBodyParsingMiddleware();
 
-    // 2. ログ用DB接続 & ミドルウェア登録
-    // 環境変数から設定を取得
+    // 2. ログ用DB接続 & ミドルウェア登録（PDO）
+    // ※ Container.php 側の DatabaseHandler を PDO 前提にしたため、ここも PDO で統一
     $dbHost = getenv('DB_HOST') ?: 'localhost';
     $dbUser = getenv('DB_USER') ?: 'root';
     $dbPass = getenv('DB_PASS') ?: '';
     $dbName = getenv('DB_NAME') ?: 'uisagent';
     $dbPort = (int)(getenv('DB_PORT') ?: 3306);
 
-    // ログ専用のコネクション (アプリ本体のPDOとは別)
-    $mysqli = new mysqli($dbHost, $dbUser, $dbPass, $dbName, $dbPort);
+    try {
+        $dsn = sprintf('mysql:host=%s;dbname=%s;port=%d;charset=utf8mb4', $dbHost, $dbName, $dbPort);
+        $pdo = new PDO($dsn, $dbUser, $dbPass, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
 
-    if (!$mysqli->connect_error) {
-        $mysqli->set_charset('utf8mb4');
-
-        // ロガーの作成
         $accessLogger = new Logger('access_log');
-        
-        // ハンドラーを登録 (s_logs テーブル)
-        $accessLogger->pushHandler(new DatabaseHandler($mysqli, 's_logs'));
-
-        // ミドルウェアとしてアプリに追加
+        $accessLogger->pushHandler(new DatabaseHandler($pdo, 'c_logs'));
         $app->add(new DatabaseLogMiddleware($accessLogger));
-    } else {
+    } catch (\Throwable $e) {
         // 接続失敗時は標準エラーログに出力 (アプリは続行)
-        error_log('Log DB Connection Failed: ' . $mysqli->connect_error);
+        error_log('Log DB Connection Failed: ' . $e->getMessage());
     }
 
     // 3. エラーハンドリング設定
