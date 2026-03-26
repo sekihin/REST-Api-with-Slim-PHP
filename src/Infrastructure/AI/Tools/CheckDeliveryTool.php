@@ -14,7 +14,7 @@ use InvalidArgumentException;
 
 /**
  * 配送状況照会ツール (CheckDeliveryTool)
- * AIエージェントがユーザーに代わって注文の配送状況を照会するためのツールです。
+ * AIエージェントがユーザーに代わって契約製品の配送状況を照会するためのツールです。
  */
 class CheckDeliveryTool extends Tool
 {
@@ -22,7 +22,7 @@ class CheckDeliveryTool extends Tool
 
     protected string $name = 'check_delivery';
 
-    protected ?string $description = '注文IDに基づいて配送状況を照会します。契約の存在を確認した上で呼び出してください。';
+    protected ?string $description = '契約番号に基づいて配送状況を照会します。契約の存在を確認した上で呼び出してください。';
 
     protected array $properties = [];
 
@@ -57,7 +57,7 @@ class CheckDeliveryTool extends Tool
         if ($orderId === '') {
             return json_encode([
                 'status' => 'error',
-                'message' => '注文番号は必須です。'
+                'message' => '契約番号は必須です。'
             ], JSON_UNESCAPED_UNICODE);
         }
 
@@ -67,7 +67,7 @@ class CheckDeliveryTool extends Tool
             if (!$order) {
                 return json_encode([
                     'status' => 'error',
-                    'message' => '該当する注文が見つかりませんでした。'
+                    'message' => '該当する契約が見つかりませんでした。'
                 ], JSON_UNESCAPED_UNICODE);
             }
 

@@ -7,8 +7,9 @@ use Slim\Routing\RouteCollectorProxy;
 use Psr\Http\Message\RequestInterface as Request; 
 use Psr\Http\Message\ResponseInterface as Response;
 use App\Application\Controllers\ChatController;
-use App\Application\Controllers\OrderController; 
-use App\Application\Controllers\InventoryController; 
+use App\Application\Controllers\RagController;
+use App\Application\Controllers\OrderController;
+use App\Application\Controllers\InventoryController;
 use App\Application\Controllers\AuthController;
 use App\App\CustomResponse;
 use App\Infrastructure\AI\Factories\AgentFactory;
@@ -165,111 +166,19 @@ return function (App $app) {
         );
     });      
 
-    // メッセージを受け取るテスト用チャットエンドポイント
-    // URL 例:
-    //   GET /agent/doubao/step4/?message=こんにちは
-    //   POST /agent/doubao/step4  body: { "message": "こんにちは" } または message=...
-    // RAG Workflow:
-    //   1. User Message
-    //   2. Pre-Process Node (クエリ正規化)
-    //   3. Retrieval Node (KnowledgeBaseService でベクトル検索)
-    //   4. Post-Process Node (検索結果のテキスト整形)
-    //   5. Enrich Instructions Node (RouterAgent のシステムプロンプトへ注入)
-    //   6. Chat Node (RouterAgent による応答生成)
-    //   7. Tool Node (RouterAgent 内で LookupOrder / CheckDelivery / SearchFaq ツール呼び出し)
-    //   8. Assistant Message (HTTP レスポンス JSON としてクライアントへ返却)
-    $app->map(['GET', 'POST'], '/agent/doubao/step4', function (Request $request, Response $response) use ($app) {
-        $customResponse = new CustomResponse();
-
-        $queryParams = $request->getQueryParams();
-        $bodyParams  = $request->getParsedBody() ?? [];
-
-        $userMessage =
-            $bodyParams['message']
-                ?? $queryParams['message']
-                ?? null;
-        if ($userMessage === null || $userMessage === '') {
-            return $customResponse->withJson(['status' => 'error', 'message' => 'No message provided'], 400);
-        }
-
-        // --- Pre-Process Node (RAG 用クエリ正規化) ---
-        // トリム・連続空白の正規化。必要に応じてクエリ書き換えや意図の正規化をここに追加可能。
-        $preprocessedMessage = trim(preg_replace('/\s+/u', ' ', (string) $userMessage));
-        if ($preprocessedMessage === '') {
-            return $customResponse->withJson(['status' => 'error', 'message' => 'Message is empty after preprocessing'], 400);
-        }
-
-        // 3. Retrieval Node: ナレッジベース検索
-        $knowledgeContext = '';
-        try {
-            $container = $app->getContainer();
-            /** @var KnowledgeBaseService $kbService */
-            $kbService = $container->get(KnowledgeBaseService::class);
-            $kbResults = $kbService->searchDocuments($preprocessedMessage, 3);
-
-            // 4. Post-Process Node: 検索結果のテキスト整形
-            if (!empty($kbResults)) {
-                $lines = [];
-                $lines[] = "以下は社内ナレッジベースから取得した関連情報です。内容を参考にして、ユーザーの質問に一貫性のある回答を行ってください。";
-                foreach ($kbResults as $idx => $doc) {
-                    $rank = $idx + 1;
-                    $title = $doc['title'] ?? '不明';
-                    $section = $doc['section'] ?? '不明';
-                    $content = $doc['content'] ?? '';
-                    $lines[] = "[文書 {$rank}: {$title} ({$section})]";
-                    $lines[] = $content;
-                    $lines[] = "";
-                }
-                $knowledgeContext = implode("\n", $lines);
-            }
-        } catch (\Throwable $e) {
-            // ナレッジ検索部分のエラーは致命的ではないため、ログ出力のみにとどめて通常のフローを継続
-            // （本番では LoggerInterface を使って記録することを推奨）
-        }
-
-        // 5. Enrich Instructions Node: RouterAgent のシステムプロンプトへナレッジを注入
-        try {
-            $container = $app->getContainer();
-            /** @var AgentFactory $agentFactory */
-            $agentFactory = $container->get(AgentFactory::class);
-            $agent = $agentFactory->createRouterAgent('guest');
-
-            if ($knowledgeContext !== '') {
-                // 5-1. RAG で構築した Knowledge Context を RouterAgent に付与
-                $agent->withKnowledgeContext($knowledgeContext);
-            }
-
-            // 6. Chat Node: RouterAgent による応答生成（内部でツール呼び出しも行われうる）
-            $result = $agent->run($preprocessedMessage);
-            $replyContent = $result->getContent(); // Message オブジェクトからアシスタントメッセージ本文を取得
-        } catch (\Throwable $e) {
-            return $customResponse->withJson([
-                'status'  => 'error',
-                'message' => 'エラー: ' . $e->getMessage(),
-            ], 500, JSON_UNESCAPED_UNICODE);
-        }
-
-        // 8. Assistant Message: HTTP レスポンス JSON としてクライアントへ返却
-        return $customResponse->withJson(
-            [
-                'status'   => 'ok',
-                'reply'    => $replyContent,
-                'preprocessed_message' => $preprocessedMessage, // デバッグ用
-                'knowledge_used' => $knowledgeContext !== '',
-            ],
-            200,
-            JSON_UNESCAPED_UNICODE
-        );
-    }); 
-
     // APIルートグループ
     // 全てのルートは '/api' プレフィックスを持ちます。
-    $app->group('/api', function (RouteCollectorProxy $group) {
+    $app->group('/agent/api', function (RouteCollectorProxy $group) {
         
         // --- 🤖 AIエージェント機能 ---
         // ユーザーからのチャットメッセージを受け取り、AIの回答を返します。
         // URL: POST /api/chat
         $group->post('/chat', [ChatController::class, 'chat']);
+
+        // --- 🤖 RAGエージェント機能 ---
+        // ユーザーからのRAGリクエストを受け取り、RAGの回答を返します。
+        // URL: POST /api/rag
+        $group->post('/rag', [RagController::class, 'rag']);
 
         // --- 📦 ドメイン: 在庫管理 (Inventory) ---
         // 在庫に関する操作を '/inventory' グループにまとめます。

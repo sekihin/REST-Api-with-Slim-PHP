@@ -12,9 +12,9 @@ use NeuronAI\Exceptions\MissingCallbackParameter;
 use NeuronAI\Exceptions\ToolCallableNotSet;
 
 /**
- * 在庫確認ツール (CheckInventoryTool)
- * AIエージェントが、特定の商品のリアルタイム在庫数を問い合わせるために使用するクラスです。
- * 商品名やSKU（最小管理単位）に基づいた検索機能を提供します。
+ * 製品ライフサイクル確認ツール (CheckProductLifecycleTool)
+ * AIエージェントが、特定の製品のサポート終了日と販売終了日を問い合わせるために使用するクラスです。
+ * 製品名やSKU（最小管理単位）に基づいた検索機能を提供します。
  */
 class CheckInventoryTool extends Tool 
 {
@@ -33,7 +33,7 @@ class CheckInventoryTool extends Tool
      * ツールの説明
      * LLMはこの文章を読んで、どのような時にこのツールを使うべきか判断します。
      */
-    protected ?string $description = '特定商品のリアルタイム在庫数を検索します。商品名またはSKUでの検索をサポートします。';
+    protected ?string $description = '特定製品のサポート終了日と販売終了日を検索します。製品名またはSKUでの検索をサポートします。';
 
     /**
      * プロパティ定義
@@ -69,7 +69,7 @@ class CheckInventoryTool extends Tool
             new ToolProperty(
                 name: 'product_name',
                 type: PropertyType::STRING,
-                description: '商品名のキーワード。例: "ワイヤレスマウス" や "iPhone 15"',
+                description: '製品名のキーワード。例: "ワイヤレスマウス" や "iPhone 15"',
                 required: true
             )
         ];
@@ -77,7 +77,7 @@ class CheckInventoryTool extends Tool
 
     /**
      * ツールの実行ロジック
-     * @param string $productName 商品名
+     * @param string $productName 製品名
      * @return string AIに返すJSON形式の実行結果
      */
     private function run(string $productName): string
@@ -85,35 +85,31 @@ class CheckInventoryTool extends Tool
         try {
             // バリデーション
             if (empty($productName)) {
-                return json_encode(['error' => '商品名は必須です'], JSON_UNESCAPED_UNICODE);
+                return json_encode(['error' => '製品名は必須です'], JSON_UNESCAPED_UNICODE);
             }
 
-            // ドメインサービスを呼び出して在庫を検索
-            // 名前での検索は部分一致などで複数の商品がヒットする可能性があるため、リスト形式で取得します。
+            // ドメインサービスを呼び出して製品情報を検索
+            // 名前での検索は部分一致などで複数の製品がヒットする可能性があるため、リスト形式で取得します。
             $items = $this->inventoryService->checkStockByName($productName);
 
-            // 該当する商品が見つからなかった場合
+            // 該当する製品が見つからなかった場合
             if (empty($items)) {
                 return json_encode([
                     'status' => 'not_found',
-                    'message' => "{$productName}' を含む商品が見つかりませんでした。" // "〜を含む商品が見つかりませんでした"
+                    'message' => "{$productName}' を含む製品が見つかりませんでした。"
                 ], JSON_UNESCAPED_UNICODE);
             }
 
             // 検索結果をAIが読みやすい形式に整形（フォーマット）
             // 全てのDBカラムを返すとトークンを無駄に消費するため、
-            // AIの回答生成に必要な重要フィールド（名前、SKU、在庫数、ステータス）のみに絞り込みます。
+            // AIの回答生成に必要な重要フィールド（名前、SKU、サポート終了日、販売終了日）のみに絞り込みます。
             $result = array_map(function ($item) {
                 return [
                     'name' => $item['name'],
                     'sku' => $item['sku'],
-                    'stock_qty' => $item['quantity'],
-                    // 在庫数に基づいて、AIが判断しやすいテキストステータスを付与
-                    'status' => $item['quantity'] > 0 ? 'In Stock' : 'Out of Stock',
-                    
-                    // 必要に応じて倉庫の場所などの情報を追加可能ですが、
-                    // 現状はビジネス要件に応じてコメントアウトしています。
-                    // 'warehouse' => $item['warehouse_location'] 
+                    'support_end_date' => $item['support_end_date'] ?? '未設定', // サポート終了日
+                    'sales_end_date' => $item['sales_end_date'] ?? '未設定',   // 販売終了日
+                    // 必要に応じて追加情報を追加可能
                 ];
             }, $items);
 
@@ -121,7 +117,7 @@ class CheckInventoryTool extends Tool
             return json_encode([
                 'status' => 'success',
                 'count' => count($result), // ヒット件数
-                'items' => $result         // 整形済みの商品リスト
+                'items' => $result         // 整形済みの製品リスト
             ], JSON_UNESCAPED_UNICODE);
 
         } catch (\Throwable $e) {
@@ -130,7 +126,7 @@ class CheckInventoryTool extends Tool
             // error_log($e->getMessage());
 
             // AIには内部エラーの詳細を見せず、シンプルなメッセージを返します。
-            return json_encode(['error' => '在庫システムは一時的に混み合っています'], JSON_UNESCAPED_UNICODE);
+            return json_encode(['error' => '製品情報システムは一時的に混み合っています'], JSON_UNESCAPED_UNICODE);
         }
     }
 

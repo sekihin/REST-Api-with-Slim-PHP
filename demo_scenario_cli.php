@@ -1,21 +1,21 @@
 <?php
 
 /***
- * 关于下面实际场景的DEMO。
+ * 下記実際のシナリオに関するデモです。
 
-# 举个实际场景（订单系统）
+# 実際の使用シナリオ（注文システム）
 
-用户说：
+ユーザーからの問い合わせ：
 
-> “我昨天买的那个商品怎么还没发货？”
+> 「昨日購入した商品がなぜ発送されていないのですか？」
 
-Neuron AI 可以：
+Neuron AI は以下の処理を実行できます：
 
-1. 解析自然语言
-2. 调用订单查询工具
-3. 检查库存系统
-4. 判断是否异常
-5. 自动生成客服回复
+1. 自然言語を解析
+2. 注文照会ツールを呼び出し
+3. 在庫システムを確認
+4. 異常状態かどうかを判断
+5. カスタマーサポート用の返信を自動生成
  */
 
 require __DIR__ . '/vendor/autoload.php';
@@ -25,74 +25,74 @@ use App\Domain\Order\OrderRepository;
 use App\Domain\Inventory\InventoryService;
 use App\Infrastructure\AI\Agents\RouterAgent;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
-use App\Infrastructure\AI\Tools\RefundOrderTool; // 即使不用也要加载
+use App\Infrastructure\AI\Tools\RefundOrderTool; // 使用しなくても読み込みが必要
 use App\Infrastructure\AI\Tools\CheckInventoryTool;
-use App\Infrastructure\External\DeepSeekProvider; // 或 GeminiProvider
+use App\Infrastructure\External\DeepSeekProvider; // または GeminiProvider
 use Psr\Log\NullLogger;
 
-// --- 1. 模拟环境搭建 (Mocking) ---
+// --- 1. 模擬環境構築 (Mocking) ---
 
-// A. 模拟用户
+// A. ユーザー情報の模擬
 $userId = 'USER_888';
 $userName = '田中 太郎';
 
-// B. 模拟“昨天”下的订单 (状态: 处理中)
+// B. 「昨日」作成された注文の模擬 (ステータス: 処理中)
 $date = new DateTimeImmutable();
-$yesterday = $date->modify('-1 day'); // 新しいインスタンスが返る
+$yesterday = $date->modify('-1 day'); // 新しいインスタンスが返される
 $orderId = 'ORD-' . $yesterday->format('Ymd') . '-001';
 $productName = 'Sony PlayStation 5 Pro';
 
 $mockOrder = new Order(
     id: $orderId,
-    status: 'Processing', // 处理中，尚未发货
+    status: '処理中', // 処理中、発送前の状態
     total: 119980,
     items: [
         ['name' => $productName, 'quantity' => 1, 'price' => 119980]
     ],
-    createdAt: $yesterday // 假设 Order 实体有这个字段
+    createdAt: $yesterday // Orderエンティティにこのフィールドが存在するものとする
 );
 
-// C. 模拟库存 (库存为 0，导致无法发货)
+// C. 在庫情報の模擬 (在庫数0で発送不能となる)
 $mockInventory = [
-    $productName => 0 // 缺货！
+    $productName => 0 // 在庫切れ！
 ];
 
 echo "========================================\n";
-echo "🛠️  SCENARIO SETUP\n";
-echo "User: {$userName} (ID: {$userId})\n";
-echo "Order: {$orderId} (Placed: Yesterday, Item: {$productName})\n";
-echo "Inventory: {$productName} = 0 (Out of Stock)\n";
+echo "🛠️  シナリオ設定\n";
+echo "ユーザー: {$userName} (ID: {$userId})\n";
+echo "注文番号: {$orderId} (注文日: 昨日、商品: {$productName})\n";
+echo "在庫状況: {$productName} = 0 (在庫切れ)\n";
 echo "========================================\n\n";
 
-// --- 2. 依赖注入 (手动组装，模拟 Container) ---
+// --- 2. 依存性注入 (手動で組み立て、コンテナの模擬) ---
 
-// 模拟 OrderRepository
+// OrderRepositoryの模擬
 $orderRepo = new class($mockOrder, $userId) implements OrderRepository {
     private $order;
     private $uid;
     public function __construct($order, $uid) { $this->order = $order; $this->uid = $uid; }
     
     public function findOrderOfId(string $id): ?Order {
-        // 简单模拟：只要ID对或者是查询最近订单，都返回这个订单
+        // 簡易模擬：IDが一致するか、最近の注文を検索する場合はこの注文を返す
         return $this->order;
     }
     
-    // 模拟一个新方法：查找用户最近订单
+    // 新しいメソッドの模擬：ユーザーの最新注文を検索
     public function findLatestOrder(string $userId): ?Order {
         return ($userId === $this->uid) ? $this->order : null;
     }
 };
 
-// 模拟 OrderService
-// OrderService に getLatestOrder メソッドが追加されたので、直接使用できます
+// OrderServiceの模擬
+// OrderService に getLatestOrder メソッドが追加されたため、直接使用可能
 $orderService = new \App\Domain\Order\OrderService($orderRepo);
 
-// 模拟 InventoryService
+// InventoryServiceの模擬
 $inventoryService = new class($mockInventory) extends InventoryService {
     private $stock;
     public function __construct($stock) { $this->stock = $stock; }
     public function checkStockByName(string $name): array {
-        // 模拟模糊搜索
+        // あいまい検索の模擬
         foreach ($this->stock as $prod => $qty) {
             if (str_contains($prod, $name)) {
                 return [['name' => $prod, 'sku' => 'TEST-SKU', 'quantity' => $qty]];
@@ -102,59 +102,58 @@ $inventoryService = new class($mockInventory) extends InventoryService {
     }
 };
 
-// --- 3. 实例化 AI Agent ---
+// --- 3. AI Agentのインスタンス化 ---
 
-// 初始化工具
+// ツールの初期化
 $lookupTool = new LookupOrderTool($orderService);
 $refundTool = new RefundOrderTool($orderService, new NullLogger());
 $inventoryTool = new CheckInventoryTool($inventoryService);
 
-// 初始化 LLM (这里使用 Mock LLM 来演示思维链，或者你可以换成真实的 DeepSeekProvider)
-// 为了演示效果，我们假设 LLM 已经“思考”出了步骤。
-// 如果你有 API Key，替换为 new DeepSeekProvider(...) 即可看到真实推理。
+// LLMの初期化 (思考プロセスをデモするためMock LLMを使用、実際のDeepSeekProviderに置き換えも可能)
+// デモ効果のため、LLMがすでに「思考ステップ」を導き出したものと仮定
 
-/* 真实环境: */
+/* 実環境での使用例: */
 // $llm = new DeepSeekProvider(getenv('DEEPSEEK_API_KEY'), new NullLogger());
 
-/* 演示环境 (Mock LLM Output): */
-// 我们手动打印 Agent 的执行步骤来模拟 AI 的思考过程
-echo "🤖 Agent Activated. Processing user request...\n";
-echo "User Query: \"我昨天买的那个商品怎么还没发货？\"\n\n";
+/* デモ環境 (Mock LLM出力): */
+// AIの思考プロセスを模擬するため、Agentの実行ステップを手動で出力
+echo "🤖 Agentが起動しました。ユーザーのリクエストを処理中...\n";
+echo "ユーザークエリ: 「昨日購入した商品がなぜ発送されていないのですか？」\n\n";
 
-// --- 4. 模拟 Agent 的思维链 (Chain of Thought) ---
+// --- 4. Agentの思考プロセス模擬 (Chain of Thought) ---
 
-// STEP 1: 分析意图
-echo "🧠 [Thought]: 用户在询问发货状态。由于用户没提供订单号，但提到了“昨天”，我需要先调用工具查找该用户最近的订单。\n";
+// STEP 1: 意図の分析
+echo "🧠 [思考]: ユーザーが発送状況を問い合わせています。注文番号は提供されていませんが、「昨日」という情報があるため、まず該当ユーザーの最新注文を検索するツールを呼び出す必要があります。\n";
 
-// Action 1: 查找订单
-echo "🔧 [Call Tool]: lookup_order(user_id='{$userId}', time_range='latest')\n";
-$orderData = $orderService->getLatestOrder($userId); // 模拟工具调用
-echo "   -> [Tool Output]: Found Order {$orderData->getId()}. Status: 'Processing'. Item: '{$productName}'.\n";
+// Action 1: 注文の検索
+echo "🔧 [ツール呼び出し]: lookup_order(user_id='{$userId}', time_range='latest')\n";
+$orderData = $orderService->getLatestOrder($userId); // ツール呼び出しの模擬
+echo "   -> [ツール出力]: 注文 {$orderData->getId()} を発見しました。ステータス: '処理中'。商品: '{$productName}'。\n";
 
-// STEP 2: 分析状态
-echo "\n🧠 [Thought]: 订单找到了，状态是 'Processing' (处理中)。这解释了为什么没发货。但我需要知道原因。通常是因为缺货。我需要检查该商品的库存。\n";
+// STEP 2: ステータスの分析
+echo "\n🧠 [思考]: 注文を特定しました。ステータスは「処理中」です。これが発送されていない理由を説明しています。ただし、根本原因を確認する必要があります。通常は在庫切れが原因です。該当商品の在庫を確認します。\n";
 
-// Action 2: 查库存
-echo "🔧 [Call Tool]: check_inventory(product_name='{$productName}')\n";
-$stockData = $inventoryService->checkStockByName($productName); // 模拟工具调用
-echo "   -> [Tool Output]: {$productName}: Quantity = 0.\n";
+// Action 2: 在庫の確認
+echo "🔧 [ツール呼び出し]: check_inventory(product_name='{$productName}')\n";
+$stockData = $inventoryService->checkStockByName($productName); // ツール呼び出しの模擬
+echo "   -> [ツール出力]: {$productName}: 在庫数 = 0。\n";
 
-// STEP 3: 最终判断
-echo "\n🧠 [Thought]: 真相大白。库存为 0，导致订单卡在处理中。我需要向用户解释缺货情况，并安抚用户。\n";
+// STEP 3: 最終的な判断
+echo "\n🧠 [思考]: 原因が判明しました。在庫数が0のため、注文が処理中の状態にスタックしています。ユーザーに在庫切れの状況を説明し、謝罪する必要があります。\n";
 
-// --- 5. 生成最终回复 ---
+// --- 5. 最終的な返信の生成 ---
 
 $finalResponse = <<<REPLY
-您好，{$userName}。
+{$userName} 様
 
-帮您查询到了，您昨天下的订单（订单号：{$orderId}）目前状态为“处理中”。
+確認したところ、昨日ご注文いただいた注文（注文番号：{$orderId}）は現在「処理中」のステータスとなっております。
 
-经过核实，您购买的商品 **"{$productName}"** 目前暂时 **缺货 (库存不足)**，这导致了发货延迟。我们正在紧急补货中。
+調査の結果、ご購入いただいた商品 **「{$productName}」** は現在 **在庫切れ（在庫不足）** のため、発送が遅延しております。緊急的に補充を進めております。
 
-非常抱歉给您带来了不便。如果您愿意等待，发货后我们会第一时间通知您；如果您需要取消订单或申请退款，也可以直接告诉我。
+ご不便をおかけし、誠に申し訳ございません。もしお待ちいただける場合は、発送完了後に速やかにご連絡いたします。また、注文のキャンセルまたは返金を希望される場合は、こちらにご連絡ください。
 REPLY;
 
-echo "\n💬 [Agent Response]:\n";
+echo "\n💬 [Agentからの返信]:\n";
 echo "--------------------------------------------------\n";
 echo $finalResponse . "\n";
 echo "--------------------------------------------------\n";
