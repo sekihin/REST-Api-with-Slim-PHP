@@ -47,7 +47,7 @@ The system includes specialized AI agents in `src/Infrastructure/AI/Agents/`:
 - **RouterAgent** - Routes requests to appropriate agents
 
 AI tools in `src/Infrastructure/AI/Tools/`:
-- CheckDeliveryTool, CheckInventoryTool, LookupOrderTool, ProcessOrderTool, RefundOrderTool, SearchManuaryTool
+- CheckDeliveryTool, CheckInventoryTool, LookupOrderTool, ProcessOrderTool, RefundOrderTool, SearchFaqTool
 
 ## LLM Providers
 

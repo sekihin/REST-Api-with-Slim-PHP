@@ -1,6 +1,6 @@
 <?php
 
-require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/../vendor/autoload.php';
 
 use App\Neuron\Agents\CheckoutAgent;
 use App\Infrastructure\AI\Tools\ProcessOrderTool;
@@ -18,16 +18,16 @@ $agent = new CheckoutAgent($provider, $processOrderTool);
 
 // --- 会話のシミュレーション ---
 
-echo "🤖 Agent: ご注文内容の確認です。注文ID「ORD-20260310-999」で確定してよろしいでしょうか？\n\n";
+echo "🤖 Agent: ご契約内容の確認です。契約ID「ORD-20260310-999」で確定してよろしいでしょうか？\n\n";
 
 $userInput = "はい、確定でお願いします。";
 echo "👤 User: {$userInput}\n\n";
 echo "🔄 Agentが思考中...\n";
 
 // エージェントにメッセージを送信（内部で思考し、ツールを呼び出し、結果を回答します）
-// ※会話履歴を維持するために、システムプロンプトに注文IDをこっそり含ませるか、
+// ※会話履歴を維持するために、システムプロンプトに契約IDをこっそり含ませるか、
 // Userの入力にコンテキストとして付与する設計が一般的です。
-$response = $agent->run("現在の注文IDは ORD-20260310-999 です。ユーザーの回答：「{$userInput}」");
+$response = $agent->run("現在の契約IDは ORD-20260310-999 です。ユーザーの回答：「{$userInput}」");
 
 echo "\n💬 Agentからの最終回答:\n";
 echo "--------------------------------------------------\n";

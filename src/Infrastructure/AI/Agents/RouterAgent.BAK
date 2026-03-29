@@ -11,7 +11,8 @@ use NeuronAI\Chat\Messages\UserMessage;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
-use App\Infrastructure\AI\Tools\GetInstallerTool;
+use App\Infrastructure\AI\Tools\SearchInstallerTool;
+use App\Workflows\GetInstallerWorkflow;
 
 /**
  * ルーターエージェント (Router Agent)
@@ -34,20 +35,20 @@ class RouterAgent extends Agent
      * @param LookupOrderTool $lookupOrderTool 契約検索ツール
      * @param CheckDeliveryTool $checkDeliveryTool 配送状況照会ツール
      * @param SearchFaqTool $searchFaqTool マニュアル・FAQ検索ツール
-     * @param GetInstallerTool $GetInstallerTool インストーラー検索ツール
+     * @param SearchInstallerTool $searchInstallerTool インストーラー検索ツール
      */
     public function __construct(
         AIProviderInterface $llm,
         LookupOrderTool $lookupOrderTool,
         CheckDeliveryTool $checkDeliveryTool,
         SearchFaqTool $searchFaqTool,
-        GetInstallerTool $GetInstallerTool // 追加
+        SearchInstallerTool $searchInstallerTool // 追加
     ) {
         $this->allowedTools = [
             $lookupOrderTool,
             $checkDeliveryTool,
             $searchFaqTool,
-            $GetInstallerTool // 追加
+            $searchInstallerTool // 追加
         ];
 
         $this->setAiProvider($llm);

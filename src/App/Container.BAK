@@ -28,11 +28,7 @@ use App\Workflows\CheckDelivery\Nodes\EvaluateDeliveryNode;
 use App\Infrastructure\AI\Tools\CheckInventoryTool;
 use App\Infrastructure\AI\Tools\RefundOrderTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
-use App\Infrastructure\AI\Tools\GetInstallerTool;
 use App\Infrastructure\AI\Tools\SearchInstallerTool;
-use App\Infrastructure\AI\Agents\GetInstallerAgent;
-use App\Workflows\GetInstaller\GetInstallerWorkflow;
-use App\Workflows\GetInstaller\Nodes\ProcessInstallerQueryNode;
 use App\Infrastructure\External\GeminiProvider;
 use App\Infrastructure\External\DeepSeekProvider;
 use App\Infrastructure\External\DoubaoProvider;
@@ -349,26 +345,6 @@ $container[AIProviderInterface::class] = function ($c) {
     throw new \InvalidArgumentException("Unsupported LLM_PROVIDER: {$provider}");
 };
 
-// GetInstaller ワークフロー（Router の GetInstallerTool → Workflow → GetInstallerAgent → SearchInstallerTool）
-$container[GetInstallerAgent::class] = function ($c) {
-    return new GetInstallerAgent(
-        $c[AIProviderInterface::class],
-        $c[SearchInstallerTool::class]
-    );
-};
-
-$container[ProcessInstallerQueryNode::class] = function ($c) {
-    return new ProcessInstallerQueryNode($c[GetInstallerAgent::class]);
-};
-
-$container[GetInstallerWorkflow::class] = function ($c) {
-    return new GetInstallerWorkflow($c[ProcessInstallerQueryNode::class]);
-};
-
-$container[GetInstallerTool::class] = function ($c) {
-    return new GetInstallerTool($c[GetInstallerWorkflow::class]);
-};
-
 // ルーターエージェント本体
 $container[RouterAgent::class] = function ($c) {
     return new RouterAgent(
@@ -376,7 +352,7 @@ $container[RouterAgent::class] = function ($c) {
         $c[LookupOrderTool::class],
         $c[CheckDeliveryTool::class],
         $c[SearchFaqTool::class],
-        $c[GetInstallerTool::class]
+        $c[SearchInstallerTool::class]
     );
 };
 

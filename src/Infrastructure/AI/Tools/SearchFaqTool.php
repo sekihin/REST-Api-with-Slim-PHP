@@ -11,12 +11,13 @@ use App\Domain\Knowledge\KnowledgeBaseService;
 use Psr\Log\LoggerInterface;
 use NeuronAI\Exceptions\MissingCallbackParameter;
 use NeuronAI\Exceptions\ToolCallableNotSet;
+use Throwable;
 
 /**
- * マニュアル・FAQ検索ツール (SearchManuaryTool)
+ * マニュアル・FAQ検索ツール (SearchFaqTool)
  * AIエージェントがマニュアルやFAQを検索するためのツールです。
  */
-class SearchManuaryTool extends Tool
+class SearchFaqTool extends Tool
 {
     private KnowledgeBaseService $kbService;
     private LoggerInterface $logger;
@@ -36,7 +37,9 @@ class SearchManuaryTool extends Tool
 
         $this->kbService = $kbService;
         $this->logger = $logger;
-        $this->setCallable(fn (string $query) => $this->run($query));
+        
+        // フィルタタイプを第2引数で受け取るように変更
+        $this->setCallable(fn (string $query, ?string $filter_doc_type = null) => $this->run($query, $filter_doc_type));
     }
 
     private function buildProperties(): array
@@ -47,6 +50,12 @@ class SearchManuaryTool extends Tool
                 type: PropertyType::STRING,
                 description: '検索したい内容のキーワードや自然言語（例: "パスワードリセット", "製品バージョンアップ操作手順"）',
                 required: true
+            ),
+            new ToolProperty(
+                name: 'filter_doc_type',
+                type: PropertyType::STRING,
+                description: '検索対象を特定のドキュメント種類に絞り込む場合に指定します（例: "email_template", "faq", "manual"）。指定がない場合は省略します。',
+                required: false
             )
         ];
     }
@@ -54,16 +63,18 @@ class SearchManuaryTool extends Tool
     /**
      * ツールの実行ロジック
      */
-    private function run(string $query): string
+    private function run(string $query, ?string $filterDocType = null): string
     {
         if (empty(trim($query))) {
             return json_encode(['error' => '検索クエリを指定してください。']);
         }
 
         try {
-            $this->logger->info("AI is searching manuals for: {$query}");
+            $filterLog = $filterDocType ?? 'なし';
+            $this->logger->info("AI is searching manuals for: {$query} | Filter: {$filterLog}");
 
-            $results = $this->kbService->searchDocuments($query, 3);
+            // ハイブリッド検索の呼び出し (Top K = 3)
+            $results = $this->kbService->searchDocuments($query, $filterDocType, 3);
 
             if (empty($results)) {
                 return "関連するマニュアルや情報は見つかりませんでした。ユーザーに「該当する情報が見つからない」旨を伝えてください。";
@@ -73,14 +84,14 @@ class SearchManuaryTool extends Tool
             foreach ($results as $idx => $doc) {
                 $rank = $idx + 1;
                 $title = $doc['title'];
-                $section = $doc['section'];
+                $docType = $doc['doc_type'];
                 $content = $doc['content'];
-                $formattedOutput .= "[参照資料 {$rank}: {$title} ({$section})]\n{$content}\n\n";
+                $formattedOutput .= "[参照資料 {$rank}: {$title} (Type: {$docType})]\n{$content}\n\n";
             }
 
             return $formattedOutput;
-        } catch (\Throwable $e) {
-            $this->logger->error("SearchManuaryTool Error: " . $e->getMessage());
+        } catch (Throwable $e) {
+            $this->logger->error("SearchFaqTool Error: " . $e->getMessage());
             return "ナレッジベースの検索中にシステムエラーが発生しました。別の方法で案内してください。";
         }
     }

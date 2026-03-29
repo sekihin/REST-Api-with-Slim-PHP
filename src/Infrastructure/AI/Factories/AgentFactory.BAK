@@ -9,7 +9,7 @@ use NeuronAI\Providers\AIProviderInterface;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
-use App\Infrastructure\AI\Tools\GetInstallerTool;
+use App\Infrastructure\AI\Tools\SearchInstallerTool;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -45,7 +45,7 @@ class AgentFactory
         $lookupOrderTool = $this->container->get(LookupOrderTool::class);
         $checkDeliveryTool = $this->container->get(CheckDeliveryTool::class);
         $searchFaqTool = $this->container->get(SearchFaqTool::class);
-        $GetInstallerTool = $this->container->get(GetInstallerTool::class);
+        $searchInstallerTool = $this->container->get(SearchInstallerTool::class);
 
         // RouterAgentをインスタンス化
         return new RouterAgent(
@@ -53,7 +53,7 @@ class AgentFactory
             $lookupOrderTool,
             $checkDeliveryTool,
             $searchFaqTool,
-            $GetInstallerTool
+            $searchInstallerTool
         );
     }
 }

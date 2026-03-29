@@ -31,6 +31,7 @@
         "slim/psr7": "^1.6",
         "slim/slim": "^4.13",
         "tuupola/cors-middleware": "^1.4",
+        "twig/twig": "^3.24",
         "vlucas/phpdotenv": "^5.6"
     },
     "autoload": {
@@ -39,7 +40,8 @@
             "Neuron\\": "src/Neuron/"
         },
         "classmap": [
-            "src/common"
+            "src/common",
+            "src/Infrastructure/AI/Workflows"
         ]
     },
     "autoload-dev": {

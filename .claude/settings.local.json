@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx skillfish:*)",
+      "Bash(gh issue:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(where gh:*)"
+    ]
+  }
+}

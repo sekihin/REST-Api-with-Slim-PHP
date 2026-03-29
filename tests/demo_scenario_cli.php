@@ -3,7 +3,7 @@
 /***
  * 下記実際のシナリオに関するデモです。
 
-# 実際の使用シナリオ（注文システム）
+# 実際の使用シナリオ（契約システム）
 
 ユーザーからの問い合わせ：
 
@@ -12,13 +12,13 @@
 Neuron AI は以下の処理を実行できます：
 
 1. 自然言語を解析
-2. 注文照会ツールを呼び出し
+2. 契約照会ツールを呼び出し
 3. 在庫システムを確認
 4. 異常状態かどうかを判断
 5. カスタマーサポート用の返信を自動生成
  */
 
-require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/../vendor/autoload.php';
 
 use App\Domain\Order\Order;
 use App\Domain\Order\OrderRepository;
@@ -36,7 +36,7 @@ use Psr\Log\NullLogger;
 $userId = 'USER_888';
 $userName = '田中 太郎';
 
-// B. 「昨日」作成された注文の模擬 (ステータス: 処理中)
+// B. 「昨日」作成された契約の模擬 (ステータス: 処理中)
 $date = new DateTimeImmutable();
 $yesterday = $date->modify('-1 day'); // 新しいインスタンスが返される
 $orderId = 'ORD-' . $yesterday->format('Ymd') . '-001';
@@ -60,7 +60,7 @@ $mockInventory = [
 echo "========================================\n";
 echo "🛠️  シナリオ設定\n";
 echo "ユーザー: {$userName} (ID: {$userId})\n";
-echo "注文番号: {$orderId} (注文日: 昨日、商品: {$productName})\n";
+echo "契約番号: {$orderId} (契約日: 昨日、商品: {$productName})\n";
 echo "在庫状況: {$productName} = 0 (在庫切れ)\n";
 echo "========================================\n\n";
 
@@ -73,11 +73,11 @@ $orderRepo = new class($mockOrder, $userId) implements OrderRepository {
     public function __construct($order, $uid) { $this->order = $order; $this->uid = $uid; }
     
     public function findOrderOfId(string $id): ?Order {
-        // 簡易模擬：IDが一致するか、最近の注文を検索する場合はこの注文を返す
+        // 簡易模擬：IDが一致するか、最近の契約を検索する場合はこの契約を返す
         return $this->order;
     }
     
-    // 新しいメソッドの模擬：ユーザーの最新注文を検索
+    // 新しいメソッドの模擬：ユーザーの最新契約を検索
     public function findLatestOrder(string $userId): ?Order {
         return ($userId === $this->uid) ? $this->order : null;
     }
@@ -123,15 +123,15 @@ echo "ユーザークエリ: 「昨日購入した商品がなぜ発送されて
 // --- 4. Agentの思考プロセス模擬 (Chain of Thought) ---
 
 // STEP 1: 意図の分析
-echo "🧠 [思考]: ユーザーが発送状況を問い合わせています。注文番号は提供されていませんが、「昨日」という情報があるため、まず該当ユーザーの最新注文を検索するツールを呼び出す必要があります。\n";
+echo "🧠 [思考]: ユーザーが発送状況を問い合わせています。契約番号は提供されていませんが、「昨日」という情報があるため、まず該当ユーザーの最新契約を検索するツールを呼び出す必要があります。\n";
 
-// Action 1: 注文の検索
+// Action 1: 契約の検索
 echo "🔧 [ツール呼び出し]: lookup_order(user_id='{$userId}', time_range='latest')\n";
 $orderData = $orderService->getLatestOrder($userId); // ツール呼び出しの模擬
-echo "   -> [ツール出力]: 注文 {$orderData->getId()} を発見しました。ステータス: '処理中'。商品: '{$productName}'。\n";
+echo "   -> [ツール出力]: 契約 {$orderData->getId()} を発見しました。ステータス: '処理中'。商品: '{$productName}'。\n";
 
 // STEP 2: ステータスの分析
-echo "\n🧠 [思考]: 注文を特定しました。ステータスは「処理中」です。これが発送されていない理由を説明しています。ただし、根本原因を確認する必要があります。通常は在庫切れが原因です。該当商品の在庫を確認します。\n";
+echo "\n🧠 [思考]: 契約を特定しました。ステータスは「処理中」です。これが発送されていない理由を説明しています。ただし、根本原因を確認する必要があります。通常は在庫切れが原因です。該当商品の在庫を確認します。\n";
 
 // Action 2: 在庫の確認
 echo "🔧 [ツール呼び出し]: check_inventory(product_name='{$productName}')\n";
@@ -139,18 +139,18 @@ $stockData = $inventoryService->checkStockByName($productName); // ツール呼�
 echo "   -> [ツール出力]: {$productName}: 在庫数 = 0。\n";
 
 // STEP 3: 最終的な判断
-echo "\n🧠 [思考]: 原因が判明しました。在庫数が0のため、注文が処理中の状態にスタックしています。ユーザーに在庫切れの状況を説明し、謝罪する必要があります。\n";
+echo "\n🧠 [思考]: 原因が判明しました。在庫数が0のため、契約が処理中の状態にスタックしています。ユーザーに在庫切れの状況を説明し、謝罪する必要があります。\n";
 
 // --- 5. 最終的な返信の生成 ---
 
 $finalResponse = <<<REPLY
 {$userName} 様
 
-確認したところ、昨日ご注文いただいた注文（注文番号：{$orderId}）は現在「処理中」のステータスとなっております。
+確認したところ、昨日ご契約いただいた契約（契約番号：{$orderId}）は現在「処理中」のステータスとなっております。
 
 調査の結果、ご購入いただいた商品 **「{$productName}」** は現在 **在庫切れ（在庫不足）** のため、発送が遅延しております。緊急的に補充を進めております。
 
-ご不便をおかけし、誠に申し訳ございません。もしお待ちいただける場合は、発送完了後に速やかにご連絡いたします。また、注文のキャンセルまたは返金を希望される場合は、こちらにご連絡ください。
+ご不便をおかけし、誠に申し訳ございません。もしお待ちいただける場合は、発送完了後に速やかにご連絡いたします。また、契約のキャンセルまたは返金を希望される場合は、こちらにご連絡ください。
 REPLY;
 
 echo "\n💬 [Agentからの返信]:\n";
