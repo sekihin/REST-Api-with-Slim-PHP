@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\AI\Agents;
 
-use NeuronAI\Agent;
+use NeuronAI\Agent\Agent;
 use NeuronAI\Providers\AIProviderInterface;
 use NeuronAI\Chat\Messages\Message;
 use NeuronAI\Chat\Messages\UserMessage;
@@ -12,6 +12,8 @@ use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
 use App\Infrastructure\AI\Tools\GetInstallerTool;
+use App\Neuron\Agents\History\RedisChatHistory;
+use Redis;
 
 /**
  * ルーターエージェント (Router Agent)
@@ -43,6 +45,10 @@ class RouterAgent extends Agent
         SearchFaqTool $searchFaqTool,
         GetInstallerTool $GetInstallerTool // 追加
     ) {
+        // NeuronAI\Agent\Agent は Workflow を継承しており、親コンストラクタで workflowId 等が初期化される。
+        // これを呼ばないと Typed property Workflow::$workflowId の未初期化エラーになる。
+        parent::__construct();
+
         $this->allowedTools = [
             $lookupOrderTool,
             $checkDeliveryTool,
@@ -52,15 +58,46 @@ class RouterAgent extends Agent
 
         $this->setAiProvider($llm);
         $this->addTool($this->allowedTools);
-        $this->setInstructions($this->buildSystemPrompt());
+        $this->basePrompt = $this->buildSystemPrompt();
+        $this->setInstructions($this->basePrompt);
     }
 
     /**
-     * 文字列入力で実行し、Message を返す
+     * 文字列入力で実行し、Message を返す（短期記憶対応版）
+     *
+     * 注意:
+     * - NeuronAI の基底クラス (Workflow) には run(): Generator が定義されているため、
+     *   ここで run(...) を宣言すると PHP の互換性チェックで Fatal error になります。
+     * @param string $userMessage ユーザーからの入力
+     * @param string|null $sessionId セッションID (指定がない場合は履歴を使わない)
      */
-    public function run(string $userMessage): Message
+    public function reply(string $userMessage, ?string $sessionId = null): Message
     {
-        return $this->chat([new UserMessage($userMessage)]);
+        // Redis 拡張が無い環境では履歴機能を無効化して単発チャットにフォールバックする
+        if ($sessionId && !class_exists(\Redis::class, false)) {
+            $sessionId = null;
+        }
+
+        // セッションIDがない場合は、単発のメッセージとして処理
+        if (!$sessionId) {
+            return $this->chat([new UserMessage($userMessage)])->getMessage();
+        }
+
+        // 1. Redisから過去のメッセージ配列を取得
+        $history = $this->chatHistoryForSession($sessionId);
+        $messages = $history->getMessages();
+
+        // 2. 今回の新しいユーザーメッセージを配列の末尾に追加
+        $messages[] = new UserMessage($userMessage);
+
+        // 3. エージェントに過去の文脈ごと渡して回答を生成
+        $response = $this->chat($messages)->getMessage();
+
+        // 4. 今回のやり取りをRedisに保存 (次回以降の文脈のため)
+        $history->addUserMessage($userMessage);
+        $history->addAssistantMessage($response->getContent());
+
+        return $response;
     }
 
     /**
@@ -128,15 +165,41 @@ PROMPT;
      * @param string $knowledgeContext ナレッジベースから取得したテキスト
      * @return self メソッドチェーン用
      */
-    public function withKnowledgeContext(string $knowledgeContext): self
+    public function withHybridContext(string $memoryContext, string $knowledgeContext): self
     {
         if (trim($knowledgeContext) === '') {
             return $this;
         }
 
-        $context = "# Knowledge Context\n以下は社内ナレッジベースから取得した参考情報です。内容を優先的に参照しつつ、ユーザーの質問に回答してください。\n\n{$knowledgeContext}";
-        $this->setInstructions($this->resolveInstructions() . "\n\n" . $context);
+        $hybridPrompt = $this->basePrompt . "\n\n# Contexts\n以下のコンテキストを使用して質問に回答してください。\n\n";
+
+        if (trim($memoryContext) !== '') {
+            $hybridPrompt .= "## User memories (この特定のユーザーに関してあなたが知っていること):\n{$memoryContext}\n\n";
+        } else {
+            $hybridPrompt .= "## User memories:\n特になし\n\n";
+        }
+
+        if (trim($knowledgeContext) !== '') {
+            $hybridPrompt .= "## Knowledge base (リファレンスドキュメント・RAG):\n{$knowledgeContext}\n\n";
+        }
+
+        $this->setInstructions($this->resolveInstructions() . "\n\n" . $hybridPrompt);
 
         return $this;
+    }
+
+    /**
+     * セッションIDベースの履歴取得
+     *
+     * 注意:
+     * - NeuronAI\Agent\Agent には chatHistory(): ChatHistoryInterface が存在するため、
+     *   同名メソッドでシグネチャを変えると PHP の互換性チェックで Fatal error になります。
+     */
+    public function chatHistoryForSession(string $sessionId): RedisChatHistory
+    {
+        $redis = new Redis();
+        $redis->connect('127.0.0.1', 6379);
+
+        return new RedisChatHistory($redis, $sessionId);
     }
 }

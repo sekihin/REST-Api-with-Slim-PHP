@@ -15,6 +15,7 @@ use App\Domain\Order\OrderRepository;
 use App\Domain\Order\OrderService;
 use App\Domain\Inventory\InventoryService;
 use App\Domain\Knowledge\KnowledgeBaseService;
+use App\Domain\Memory\ChromaMemoryService;
 use App\Domain\Software\SoftwareService;
 use App\Infrastructure\Persistence\InMemoryOrderRepository;
 use App\Infrastructure\AI\Agents\RouterAgent;
@@ -266,6 +267,13 @@ $container[KnowledgeBaseService::class] = function ($c) {
     );
 };
 
+// ChromaMemoryService の登録（RAG 長期記憶）
+$container[ChromaMemoryService::class] = function ($c) {
+    return new ChromaMemoryService(
+        $c['embedding_provider']
+    );
+};
+
 // SearchFaqTool の登録
 $container[SearchFaqTool::class] = function ($c) {
     return new SearchFaqTool(
@@ -341,7 +349,7 @@ $container[AIProviderInterface::class] = function ($c) {
                 'stream' => false,
             ],
             strict_response: false,
-            httpOptions: null
+            httpClient: null
         );
     }
 
@@ -416,7 +424,8 @@ $container[ChatController::class] = function ($c) {
 $container[RagController::class] = function ($c) {
     return new RagController(
         $c[AgentFactory::class],
-        $c[KnowledgeBaseService::class]
+        $c[KnowledgeBaseService::class],
+        $c[ChromaMemoryService::class]
     );
 };
 

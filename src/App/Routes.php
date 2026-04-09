@@ -93,7 +93,7 @@ return function (App $app) {
                 /** @var AgentFactory $agentFactory */
                 $agentFactory = $container->get(AgentFactory::class);
                 $agent = $agentFactory->createRouterAgent('guest');
-                $result = $agent->run($preprocessedMessage);
+                $result = $agent->reply($preprocessedMessage);
                 $replyContent = $result->getContent();
             } catch (\Throwable $e) {
                 return $customResponse->withJson([

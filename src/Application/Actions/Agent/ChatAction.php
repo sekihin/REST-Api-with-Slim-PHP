@@ -56,7 +56,7 @@ class ChatAction
         // 4. 推論と実行 (ReActループ)
         // ここでAIのメインループが走ります：「思考(Thought)」→「ツールの選択と実行(Action)」→「結果の観察(Observation)」→「回答(Answer)」。
         // 必要な情報が揃うまでツールを自動的に呼び出し、最終的な回答を生成します。
-        $result = $agent->run($userMessage);
+        $result = $agent->reply($userMessage, $sessionId);
 
         // 5. 新しい会話履歴の保存
         // 今回の「ユーザーの質問」と「AIの最終回答」を履歴に追加します。

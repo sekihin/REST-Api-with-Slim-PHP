@@ -72,32 +72,16 @@ class ChatController
             return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
         }
 
-        // 2. 会話履歴（メモリ）の初期化
-        // RedisMessageHistoryを手動でインスタンス化します。
-        // ※より複雑になる場合は、HistoryFactoryなどを用意してカプセル化することを推奨します。
-        $history = new RedisMessageHistory($this->redis, $sessionId);
-
         // 3. エージェントの生成
         // Factory内部で、LLMの設定や必要なツール (LookupOrder, Refund...) の注入が行われます。
         $agent = $this->agentFactory->createRouterAgent($userId);
-
-        // 4. 短期記憶（スライディングウィンドウ）のロード
-        // Redisから直近N件の履歴を取得し、エージェントに注入します。
-        // これにより、AIは文脈（コンテキスト）を理解して回答できるようになります。
-        $contextMessages = $history->getMessages();
-        $agent->addToChatHistory($contextMessages);
 
         // 5. 推論の実行（AIの思考プロセス + ツール実行）
         try {
             // run() メソッド内で以下のループが自動的に行われます：
             // 思考 -> ツール選択 -> 実行 -> 結果観察 -> 回答生成
-            $result = $agent->run($userMessage);
+            $result = $agent->reply($userMessage, $sessionId);
             $replyContent = $result->getContent();
-
-            // 6. 新しい会話履歴の永続化
-            // 次回の会話のために、今回の「ユーザーの質問」と「AIの回答」を保存します。
-            $history->addUserMessage($userMessage);
-            $history->addAssistantMessage($replyContent);
 
             // 7. レスポンスの返却
             $payload = json_encode([

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\AI\Agents;
 
-use NeuronAI\Agent;
+use NeuronAI\Agent\Agent;
 use NeuronAI\Providers\AIProviderInterface;
 use App\Infrastructure\AI\Tools\SearchInstallerTool;
 
@@ -17,6 +17,9 @@ class GetInstallerAgent extends Agent
         AIProviderInterface $provider,
         SearchInstallerTool $searchInstallerTool
     ) {
+        // Workflow (NeuronAI) の内部状態初期化
+        parent::__construct();
+
         $this->setAiProvider($provider);
 
         $this->setInstructions(
