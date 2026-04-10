@@ -76,7 +76,33 @@ return function (App $app) {
                 $bodyParams['message']
                     ?? $queryParams['message']
                     ?? null;
+            // #region agent log
+            @file_put_contents('debug-915922.log', json_encode([
+                'sessionId' => '915922',
+                'runId' => 'pre',
+                'hypothesisId' => 'A',
+                'location' => 'src/App/Routes.php:/agent/route',
+                'message' => 'agent.route received request',
+                'data' => [
+                    'method' => $request->getMethod(),
+                    'hasMessage' => $userMessage !== null,
+                    'messageLen' => is_string($userMessage) ? strlen($userMessage) : null,
+                ],
+                'timestamp' => (int) (microtime(true) * 1000),
+            ], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+            // #endregion
             if ($userMessage === null || $userMessage === '') {
+                // #region agent log
+                @file_put_contents('debug-915922.log', json_encode([
+                    'sessionId' => '915922',
+                    'runId' => 'pre',
+                    'hypothesisId' => 'B',
+                    'location' => 'src/App/Routes.php:/agent/route',
+                    'message' => 'agent.route missing message -> 400',
+                    'data' => ['reason' => 'null_or_empty'],
+                    'timestamp' => (int) (microtime(true) * 1000),
+                ], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+                // #endregion
                 return $customResponse->withJson(['status' => 'error', 'message' => 'No message provided'], 400);
             }
 
@@ -84,6 +110,17 @@ return function (App $app) {
             //    トリム・連続空白の正規化。必要に応じてクエリ書き換えや意図の正規化をここに追加可能。
             $preprocessedMessage = trim(preg_replace('/\s+/u', ' ', (string) $userMessage));
             if ($preprocessedMessage === '') {
+                // #region agent log
+                @file_put_contents('debug-915922.log', json_encode([
+                    'sessionId' => '915922',
+                    'runId' => 'pre',
+                    'hypothesisId' => 'C',
+                    'location' => 'src/App/Routes.php:/agent/route',
+                    'message' => 'agent.route preprocessing -> empty -> 400',
+                    'data' => ['reason' => 'empty_after_preprocess'],
+                    'timestamp' => (int) (microtime(true) * 1000),
+                ], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+                // #endregion
                 return $customResponse->withJson(['status' => 'error', 'message' => 'Message is empty after preprocessing'], 400);
             }
 
@@ -95,7 +132,35 @@ return function (App $app) {
                 $agent = $agentFactory->createRouterAgent('guest');
                 $result = $agent->reply($preprocessedMessage);
                 $replyContent = $result->getContent();
+                // #region agent log
+                @file_put_contents('debug-915922.log', json_encode([
+                    'sessionId' => '915922',
+                    'runId' => 'pre',
+                    'hypothesisId' => 'D',
+                    'location' => 'src/App/Routes.php:/agent/route',
+                    'message' => 'agent.route routerAgent.reply ok',
+                    'data' => [
+                        'preprocessedLen' => strlen($preprocessedMessage),
+                        'replyLen' => is_string($replyContent) ? strlen($replyContent) : null,
+                    ],
+                    'timestamp' => (int) (microtime(true) * 1000),
+                ], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+                // #endregion
             } catch (\Throwable $e) {
+                // #region agent log
+                @file_put_contents('debug-915922.log', json_encode([
+                    'sessionId' => '915922',
+                    'runId' => 'pre',
+                    'hypothesisId' => 'E',
+                    'location' => 'src/App/Routes.php:/agent/route',
+                    'message' => 'agent.route routerAgent.reply threw',
+                    'data' => [
+                        'exceptionClass' => get_class($e),
+                        'code' => $e->getCode(),
+                    ],
+                    'timestamp' => (int) (microtime(true) * 1000),
+                ], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+                // #endregion
                 return $customResponse->withJson([
                     'status'  => 'error',
                     'message' => 'エラー: ' . $e->getMessage(),

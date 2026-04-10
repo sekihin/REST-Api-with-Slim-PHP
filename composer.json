@@ -65,11 +65,11 @@
             "php -r \"copy('.env.example', '.env');\"",
             "php post-create-project-command.php"
         ],
-        "coverage": "phpunit --coverage-text --coverage-html coverage",
+        "coverage": "vendor/bin/phpunit --coverage-text --coverage-html coverage",
         "crud": "php console api:generate:endpoints",
         "down": "docker-compose down",
         "start": "php -S localhost:8080 -t public public/index.php",
-        "test": "phpunit",
+        "test": "vendor/bin/phpunit",
         "up": "docker-compose up -d --build"
     },
     "require-dev": {

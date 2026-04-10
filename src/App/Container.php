@@ -15,7 +15,7 @@ use App\Domain\Order\OrderRepository;
 use App\Domain\Order\OrderService;
 use App\Domain\Inventory\InventoryService;
 use App\Domain\Knowledge\KnowledgeBaseService;
-use App\Domain\Memory\ChromaMemoryService;
+use App\Domain\Memory\ElasticsearchMemoryService;
 use App\Domain\Software\SoftwareService;
 use App\Infrastructure\Persistence\InMemoryOrderRepository;
 use App\Infrastructure\AI\Agents\RouterAgent;
@@ -267,9 +267,10 @@ $container[KnowledgeBaseService::class] = function ($c) {
     );
 };
 
-// ChromaMemoryService の登録（RAG 長期記憶）
-$container[ChromaMemoryService::class] = function ($c) {
-    return new ChromaMemoryService(
+// ElasticsearchMemoryService の登録（RAG 長期記憶）
+$container[ElasticsearchMemoryService::class] = function ($c) {
+    return new ElasticsearchMemoryService(
+        $c[\Elastic\Elasticsearch\Client::class],
         $c['embedding_provider']
     );
 };
@@ -425,7 +426,7 @@ $container[RagController::class] = function ($c) {
     return new RagController(
         $c[AgentFactory::class],
         $c[KnowledgeBaseService::class],
-        $c[ChromaMemoryService::class]
+        $c[ElasticsearchMemoryService::class]
     );
 };
 

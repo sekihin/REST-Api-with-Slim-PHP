@@ -1,20 +1,30 @@
 # Build and Release Folders
 vendor/
 tests/
+db/
 
 # Other files and folders
 .settings/
 .vscode/
+.claude/
+.cursor/
+.gitee/
+.qoder/
 
 # Executables
-*.bak
+*.conf
+*.BAK
 *.swf
 *.air
 *.ipa
 *.apk
+*.txt
+*.log
+*.xml
 .env
 .cursorrules
 .claudeignore
+CLAUDE.md
 
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important

@@ -10,7 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use NeuronAI\Providers\AIProviderInterface;
-use App\Domain\Memory\ChromaMemoryService;
+use App\Domain\Memory\ElasticsearchMemoryService;
 use Illuminate\Support\Facades\Log;
 
 class ExtractUserMemoryJob implements ShouldQueue
@@ -26,7 +26,7 @@ class ExtractUserMemoryJob implements ShouldQueue
     /**
      * ジョブの実行ロジック
      */
-    public function handle(AIProviderInterface $llm, ChromaMemoryService $chromaMemory): void
+    public function handle(AIProviderInterface $llm, ElasticsearchMemoryService $memoryService): void
     {
         $systemPrompt = <<<PROMPT
 あなたはユーザーの会話から「長期的に記憶すべき事実（Facts）」を抽出する専門アシスタントです。
@@ -56,7 +56,7 @@ PROMPT;
             if (is_array($extractedFacts) && count($extractedFacts) > 0) {
                 foreach ($extractedFacts as $fact) {
                     // ここでエンベディング生成とAPI送信が走る
-                    $chromaMemory->storeMemory($this->userId, $fact);
+                    $memoryService->storeMemory($this->userId, $fact);
                     
                     Log::info("Memory extracted and saved for {$this->userId}: {$fact}");
                 }

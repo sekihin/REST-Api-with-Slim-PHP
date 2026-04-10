@@ -8,9 +8,13 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Domain\Knowledge\KnowledgeBaseService;
-use App\Domain\Memory\ChromaMemoryService;
+use App\Domain\Memory\ElasticsearchMemoryService;
 use App\App\CustomResponse;
 use GuzzleHttp\Promise\Utils;
+use Twig\Loader\ArrayLoader;
+use Twig\Environment;
+use Twig\Extension\SandboxExtension;
+use Twig\Sandbox\SecurityPolicy;
 
 /**
  * RAGコントローラー
@@ -22,7 +26,7 @@ class RagController
     public function __construct(
         private AgentFactory $agentFactory,
         private KnowledgeBaseService $knowledgeBaseService,
-        private ChromaMemoryService $userMemoryService
+        private ElasticsearchMemoryService $userMemoryService
     ) {
     }
 
@@ -114,7 +118,34 @@ class RagController
             $result = $agent->reply($preprocessedMessage, $sessionId);
             $replyContent = $result->getContent();
             
-            // 【追加】Step 7.5: Memory Extraction - 新たな事実を長期記憶に保存
+            // ==============================================================
+            // 📝 Twig Engine - テンプレートによるデータ書き換え (SSTI対策済み)
+            // ==============================================================
+            $isEmailTemplate = ($filterDocType === 'email_template') 
+                            || (str_contains($knowledgeContext, 'Type: email_template'));
+
+            if ($isEmailTemplate) {
+                try {
+                    $productionData = [
+                        'user_name'       => 'テスト 太郎', // 実際のアプリではDB等から取得
+                        'company_name'    => '株式会社サンプル',
+                        'expiration_date' => date('Y年m月d日', strtotime('+30 days')),
+                        'login_url'       => 'https://example.com/login',
+                    ];
+
+                    $policy = new SecurityPolicy([], [], [], [], []);
+                    $sandbox = new SandboxExtension($policy, true);
+                    $loader = new ArrayLoader(['agent_reply' => $replyContent]);
+                    $twig = new Environment($loader);
+                    $twig->addExtension($sandbox);
+
+                    $replyContent = $twig->render('agent_reply', $productionData);
+                } catch (\Throwable $e) {
+                    // Twigの構文エラー時は元の文字列をそのままフォールバック
+                }
+            }
+            
+            // 🧠 Step 7.5: Memory Extraction - 新たな事実を長期記憶に保存
             // ※ 同期処理だとレスポンスが遅くなる場合があるため、本番環境では
             //    Laravel Job や Message Queue に投げる（非同期化する）のがベストです。
             if (isset($this->userMemoryService)) {
@@ -145,9 +176,11 @@ class RagController
      * RAG & Memory Workflow (Hybrid Agent):
      * 1. User Message (ユーザー入力とID取得)
      * 2. Pre-Process Node (クエリ正規化)
-     * 3a. Memory Retrieval (UserMemoryService で長期記憶検索)
-     * 3b. Knowledge Retrieval (KnowledgeBaseService でRAG検索)
-     * 4. Post-Process Node (検索結果のテキスト整形)
+     * 3a. Chat History Retrieval (RouterAgent で短期記憶検索)
+     * 3b. Memory Retrieval (UserMemoryService で長期記憶検索)
+     * 3c. Knowledge Retrieval (KnowledgeBaseService でRAG検索)
+     * 4a. Twig Engine (テンプレートエンジンでテキスト整形)
+     * 4b. Post-Process Node (検索結果のテキスト整形)
      * 5. Enrich Instructions Node (ハイブリッドコンテキストと短期記憶をAgentへ注入)
      * 6. Chat Node (RouterAgent による応答生成)
      * 7. Tool Node (Agent内部でツール呼び出し)
@@ -227,16 +260,43 @@ class RagController
         // ==============================================================
 
         try {
-            // ハイブリッドコンテキスト (RAG + 長期記憶) を注入
+            // 5. Enrich Instructions Node - ハイブリッドコンテキスト (RAG + 長期記憶) を注入
             if (method_exists($agent, 'withHybridContext')) {
                 $agent->withHybridContext($memoryContext, $knowledgeContext);
             }
 
-            // 応答生成を実行
+            // 6. Chat Node - 応答生成を実行
             $result = $agent->reply($preprocessedMessage, $sessionId);
             $replyContent = $result->getContent();
             
-            // 【追加】Step 7.5: Memory Extraction - 新たな事実を長期記憶に保存
+            // ==============================================================
+            // 📝 4a. Twig Engine - テンプレートによるデータ書き換え (SSTI対策済み)
+            // ==============================================================
+            $isEmailTemplate = ($filterDocType === 'email_template') 
+                            || (str_contains($knowledgeContext, 'Type: email_template'));
+
+            if ($isEmailTemplate) {
+                try {
+                    $productionData = [
+                        'user_name'       => 'テスト 太郎', // 実際のアプリではDB等から取得
+                        'company_name'    => '株式会社サンプル',
+                        'expiration_date' => date('Y年m月d日', strtotime('+30 days')),
+                        'login_url'       => 'https://example.com/login',
+                    ];
+
+                    $policy = new SecurityPolicy([], [], [], [], []);
+                    $sandbox = new SandboxExtension($policy, true);
+                    $loader = new ArrayLoader(['agent_reply' => $replyContent]);
+                    $twig = new Environment($loader);
+                    $twig->addExtension($sandbox);
+
+                    $replyContent = $twig->render('agent_reply', $productionData);
+                } catch (\Throwable $e) {
+                    // Twigの構文エラー時は元の文字列をそのままフォールバック
+                }
+            }
+
+            // 7.5 Memory Extraction - 新たな事実を長期記憶に保存
             // ※ 同期処理だとレスポンスが遅くなる場合があるため、本番環境では
             //    Laravel Job や Message Queue に投げる（非同期化する）のがベストです。
             if (isset($this->userMemoryService)) {
