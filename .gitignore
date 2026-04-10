@@ -22,6 +22,8 @@ db/
 *.log
 *.xml
 .env
+.env.*
+!.env.example
 .cursorrules
 .claudeignore
 CLAUDE.md
