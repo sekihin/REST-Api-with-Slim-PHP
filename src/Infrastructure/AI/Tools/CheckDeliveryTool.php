@@ -7,6 +7,7 @@ namespace App\Infrastructure\AI\Tools;
 use NeuronAI\Tools\Tool;
 use NeuronAI\Tools\PropertyType;
 use NeuronAI\Tools\ToolProperty;
+use NeuronAI\Workflow\WorkflowState;
 use App\Workflows\CheckDelivery\CheckDeliveryWorkflow;
 use NeuronAI\Exceptions\MissingCallbackParameter;
 use NeuronAI\Exceptions\ToolCallableNotSet;
@@ -50,10 +51,8 @@ class CheckDeliveryTool extends Tool
 
     private function run(string $orderId): string
     {
-        // ワークフローに初期状態（オーダーID）を渡して実行
-        $finalState = $this->workflow->init([
-            'order_id' => $orderId
-        ])->run();
+        $this->workflow->setState(new WorkflowState(['order_id' => $orderId]));
+        $finalState = $this->workflow->init()->run();
 
         // ワークフローの最終ノードが生成した JSON を返す
         return $finalState->get('result_json') ?? json_encode(['status' => 'error', 'message' => '不明なエラー']);

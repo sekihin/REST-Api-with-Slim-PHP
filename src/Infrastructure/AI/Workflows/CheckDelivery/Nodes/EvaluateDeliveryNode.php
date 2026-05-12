@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Workflows\CheckDelivery\Nodes;
 
 use NeuronAI\Workflow\Node;
-use NeuronAI\Workflow\StopEvent;
+use NeuronAI\Workflow\Events\StopEvent;
 use NeuronAI\Workflow\WorkflowState;
 use App\Workflows\CheckDelivery\Events\OrderFetchedEvent;
 

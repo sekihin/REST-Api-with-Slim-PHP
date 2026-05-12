@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Workflows\CheckDelivery\Events;
 
-use NeuronAI\Workflow\Event;
+use NeuronAI\Workflow\Events\Event;
 
 /**
  * 1. 入力値のバリデーション完了イベント

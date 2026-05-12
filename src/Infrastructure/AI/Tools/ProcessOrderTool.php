@@ -41,14 +41,13 @@ class ProcessOrderTool extends Tool
             $state = new WorkflowState();
             $state->set('order_id', $orderId);
 
-            // ワークフローの組み立て
-            $handler = Workflow::make()
+            $handler = Workflow::make(null, null, $state)
                 ->addNodes([
                     new ValidateInventoryNode(),
                     new ProcessPaymentNode(),
                     new CompleteOrderNode(),
                 ])
-                ->init($state);
+                ->init();
 
             // 実行中の echo 出力をキャプチャしてAIに返す（※本番環境ではLoggerを使用します）
             ob_start();

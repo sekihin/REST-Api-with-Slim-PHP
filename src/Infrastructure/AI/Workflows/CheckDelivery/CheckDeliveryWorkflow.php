@@ -15,7 +15,9 @@ class CheckDeliveryWorkflow extends Workflow
         private Nodes\ValidateInputNode $validateNode,
         private Nodes\FetchOrderNode $fetchNode,
         private Nodes\EvaluateDeliveryNode $evaluateNode
-    ) {}
+    ) {
+        parent::__construct();
+    }
 
     protected function nodes(): array
     {

@@ -20,6 +20,7 @@ class GetInstallerWorkflow extends Workflow
     // 依存性注入（DI）でノードを受け取る設計にしておくとテストが容易です
     public function __construct(ProcessInstallerQueryNode $queryNode)
     {
+        parent::__construct();
         $this->queryNode = $queryNode;
     }
 

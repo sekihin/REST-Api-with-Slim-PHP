@@ -7,6 +7,7 @@ namespace App\Infrastructure\AI\Tools;
 use NeuronAI\Tools\Tool;
 use NeuronAI\Tools\PropertyType;
 use NeuronAI\Tools\ToolProperty;
+use NeuronAI\Workflow\WorkflowState;
 use App\Workflows\GetInstaller\GetInstallerWorkflow;
 use NeuronAI\Exceptions\MissingCallbackParameter;
 use NeuronAI\Exceptions\ToolCallableNotSet;
@@ -51,8 +52,8 @@ class GetInstallerTool extends Tool
     private function run(string $query): string
     {
         try {
-            // ワークフローを初期化して実行
-            $finalState = $this->workflow->init(['query' => $query])->run();
+            $this->workflow->setState(new WorkflowState(['query' => $query]));
+            $finalState = $this->workflow->init()->run();
 
             // ワークフローのステートから結果を取り出してエージェントに返す
             if ($finalState->get('error')) {
