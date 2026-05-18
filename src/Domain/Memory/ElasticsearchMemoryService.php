@@ -7,6 +7,7 @@ namespace App\Domain\Memory;
 use GuzzleHttp\Promise\PromiseInterface as GuzzlePromiseInterface;
 use GuzzleHttp\Promise\Promise as GuzzlePromise;
 use Elastic\Elasticsearch\Client as ElasticsearchClient;
+use App\Common\PerfTrace;
 use App\Domain\Knowledge\EmbeddingProviderInterface;
 
 /**
@@ -92,7 +93,13 @@ class ElasticsearchMemoryService
      */
     public function searchMemories(string $userId, string $query, int $topK = 5): string
     {
+        $tEmbedding = PerfTrace::now();
         $queryVector = $this->embeddingProvider->getEmbedding($query);
+        PerfTrace::log('Memory.Embedding', $tEmbedding, [
+            'user_id' => $userId,
+            'query_length' => strlen($query),
+            'vector_dims' => count($queryVector),
+        ]);
 
         $params = [
             'index' => self::INDEX_NAME,
@@ -100,10 +107,17 @@ class ElasticsearchMemoryService
         ];
 
         try {
+            $tEs = PerfTrace::now();
             $response = $this->esClient->search($params);
             $res = $response->asArray();
 
             $totalHits = is_array($res["hits"]["total"]) ? $res["hits"]["total"]["value"] : $res["hits"]["total"];
+            PerfTrace::log('Memory.ElasticsearchSearch', $tEs, [
+                'index' => self::INDEX_NAME,
+                'user_id' => $userId,
+                'top_k' => $topK,
+                'hits' => $totalHits,
+            ]);
             
             if ($totalHits == 0) {
                 return '';
@@ -128,7 +142,14 @@ class ElasticsearchMemoryService
      */
     public function searchMemoriesAsync(string $userId, string $query, int $topK = 5): GuzzlePromiseInterface
     {
+        $tEmbedding = PerfTrace::now();
         $queryVector = $this->embeddingProvider->getEmbedding($query);
+        PerfTrace::log('Memory.Embedding', $tEmbedding, [
+            'user_id' => $userId,
+            'query_length' => strlen($query),
+            'vector_dims' => count($queryVector),
+            'mode' => 'async',
+        ]);
 
         $params = [
             'index'  => self::INDEX_NAME,
@@ -136,6 +157,7 @@ class ElasticsearchMemoryService
             'client' => ['future' => 'lazy'] // Elasticsearchの非同期モード
         ];
 
+        $tEs = PerfTrace::now();
         $httpPromise = $this->esClient->search($params);
 
         // Guzzle プロミスへのラップ（コントローラー側での Utils::all() のための型合わせ）
@@ -144,9 +166,16 @@ class ElasticsearchMemoryService
         });
 
         $httpPromise->then(
-            function ($response) use ($guzzlePromise) {
+            function ($response) use ($guzzlePromise, $userId, $topK, $tEs) {
                 $res = is_array($response) ? $response : $response->asArray();
                 $totalHits = is_array($res["hits"]["total"]) ? $res["hits"]["total"]["value"] : $res["hits"]["total"];
+                PerfTrace::log('Memory.ElasticsearchSearch', $tEs, [
+                    'index' => self::INDEX_NAME,
+                    'user_id' => $userId,
+                    'top_k' => $topK,
+                    'hits' => $totalHits,
+                    'mode' => 'async',
+                ]);
                 
                 if ($totalHits == 0) {
                     $guzzlePromise->resolve('');

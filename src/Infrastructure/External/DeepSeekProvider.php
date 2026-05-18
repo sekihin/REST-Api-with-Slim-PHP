@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\External;
 
+use App\Common\PerfTrace;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
@@ -100,6 +101,7 @@ class DeepSeekProvider implements AIProviderInterface
      */
     public function chat(array $messages, array $tools = []): array
     {
+        $tApi = PerfTrace::now();
         // リクエストペイロードの構築
         $payload = [
             'model'       => $this->model,
@@ -147,6 +149,14 @@ class DeepSeekProvider implements AIProviderInterface
                 $this->logger->info('DeepSeek Token Usage', $usage);
             }
 
+            PerfTrace::log('LLM.DeepSeekChat', $tApi, [
+                'model' => $this->model,
+                'msg_count' => count($messages),
+                'has_tools' => !empty($tools) ? 'yes' : 'no',
+                'prompt_tokens' => $usage['prompt_tokens'] ?? 0,
+                'completion_tokens' => $usage['completion_tokens'] ?? 0,
+            ]);
+
             return [
                 'role'       => $message['role'] ?? 'assistant',
                 'content'    => $message['content'] ?? null,
@@ -154,6 +164,7 @@ class DeepSeekProvider implements AIProviderInterface
             ];
 
         } catch (GuzzleException | \JsonException $e) {
+            PerfTrace::log('LLM.DeepSeekChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
             $this->logger->error('DeepSeek chat failed', ['error' => $e->getMessage()]);
             throw new \RuntimeException('DeepSeek request failed', 0, $e);
         }

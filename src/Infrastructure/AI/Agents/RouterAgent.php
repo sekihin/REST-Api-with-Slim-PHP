@@ -11,6 +11,7 @@ use NeuronAI\Chat\Messages\UserMessage;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
+use App\Common\PerfTrace;
 use App\Infrastructure\AI\Tools\GetInstallerTool;
 use App\Neuron\Agents\History\RedisChatHistory;
 use Redis;
@@ -80,22 +81,42 @@ class RouterAgent extends Agent
 
         // セッションIDがない場合は、単発のメッセージとして処理
         if (!$sessionId) {
-            return $this->chat([new UserMessage($userMessage)])->getMessage();
+            $tChat = PerfTrace::now();
+            $message = $this->chat([new UserMessage($userMessage)])->getMessage();
+            PerfTrace::log('Agent.Chat', $tChat, [
+                'session_id' => 'none',
+                'message_length' => strlen($userMessage),
+            ]);
+            return $message;
         }
 
         // 1. Redisから過去のメッセージ配列を取得
+        $tHistoryLoad = PerfTrace::now();
         $history = $this->chatHistoryForSession($sessionId);
         $messages = $history->getMessages();
+        PerfTrace::log('Agent.RedisHistoryLoad', $tHistoryLoad, [
+            'session_id' => $sessionId,
+            'history_count' => count($messages),
+        ]);
 
         // 2. 今回の新しいユーザーメッセージを配列の末尾に追加
         $messages[] = new UserMessage($userMessage);
 
         // 3. エージェントに過去の文脈ごと渡して回答を生成
+        $tChat = PerfTrace::now();
         $response = $this->chat($messages)->getMessage();
+        PerfTrace::log('Agent.Chat', $tChat, [
+            'session_id' => $sessionId,
+            'message_length' => strlen($userMessage),
+            'history_count' => count($messages),
+            'reply_length' => strlen($response->getContent()),
+        ]);
 
         // 4. 今回のやり取りをRedisに保存 (次回以降の文脈のため)
+        $tHistorySave = PerfTrace::now();
         $history->addUserMessage($userMessage);
         $history->addAssistantMessage($response->getContent());
+        PerfTrace::log('Agent.RedisHistorySave', $tHistorySave, ['session_id' => $sessionId]);
 
         return $response;
     }

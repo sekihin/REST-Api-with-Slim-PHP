@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\External;
 
+use App\Common\PerfTrace;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
@@ -98,6 +99,7 @@ class GeminiProvider implements AIProviderInterface
      */
     public function chat(array $messages, array $tools = []): array
     {
+        $tApi = PerfTrace::now();
         // 1. システムプロンプトの分離
         // OpenAIは messages 配列に 'role': 'system' を含めますが、
         // Geminiは独立したフィールド `system_instruction` として扱う必要があります。
@@ -147,8 +149,15 @@ class GeminiProvider implements AIProviderInterface
         // レスポンスボディの取得とJSONデコード
             $body = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-            return $this->parseResponse($body);
+            $parsed = $this->parseResponse($body);
+            PerfTrace::log('LLM.GeminiChat', $tApi, [
+                'model' => $this->chatModel,
+                'msg_count' => count($messages),
+                'has_tools' => !empty($tools) ? 'yes' : 'no',
+            ]);
+            return $parsed;
         } catch (GuzzleException | \JsonException $e) {
+            PerfTrace::log('LLM.GeminiChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
         // Googleの詳細なエラー情報を取得してログに残す
             $this->logger->error('Gemini chat request failed', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Gemini chat failed', 0, $e);

@@ -7,6 +7,7 @@ namespace App\Domain\Knowledge;
 use GuzzleHttp\Promise\PromiseInterface as GuzzlePromiseInterface;
 use GuzzleHttp\Promise\Promise as GuzzlePromise;
 use Elastic\Elasticsearch\Client as ElasticsearchClient;
+use App\Common\PerfTrace;
 use App\Domain\Knowledge\EmbeddingProviderInterface;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -33,7 +34,12 @@ class KnowledgeBaseService
     public function searchDocuments(string $query, ?string $filterDocType = null, int $topK = 3): array
     {
         // 1. クエリのベクトル化
+        $tEmbedding = PerfTrace::now();
         $queryVector = $this->getEmbedding($query);
+        PerfTrace::log('RAG.Embedding', $tEmbedding, [
+            'query_length' => strlen($query),
+            'vector_dims' => count($queryVector),
+        ]);
 
         // cosine 類似度は零ベクトルを受け付けない（埋め込み API 失敗時などに全要素 0 が返る）
         $useKnn = !$this->isZeroMagnitudeVector($queryVector);
@@ -73,10 +79,18 @@ class KnowledgeBaseService
         ];
 
         // 4. 検索実行
+        $tEs = PerfTrace::now();
         $response = $this->esClient->search($params);
         $res = $response->asArray();
 
         $totalHits = is_array($res["hits"]["total"]) ? $res["hits"]["total"]["value"] : $res["hits"]["total"];
+        PerfTrace::log('RAG.ElasticsearchSearch', $tEs, [
+            'index' => self::INDEX_NAME,
+            'top_k' => $topK,
+            'hits' => $totalHits,
+            'use_knn' => $useKnn ? 'yes' : 'no',
+            'filter_doc_type' => $filterDocType ?? 'none',
+        ]);
         if ($totalHits == 0) {
             return [];
         }
@@ -105,7 +119,13 @@ class KnowledgeBaseService
     public function searchDocumentsAsync(string $query, ?string $filterDocType = null, int $topK = 3): GuzzlePromiseInterface
     {
         // 1. クエリのベクトル化
+        $tEmbedding = PerfTrace::now();
         $queryVector = $this->getEmbedding($query);
+        PerfTrace::log('RAG.Embedding', $tEmbedding, [
+            'query_length' => strlen($query),
+            'vector_dims' => count($queryVector),
+            'mode' => 'async',
+        ]);
 
         // cosine 類似度は零ベクトルを受け付けない（埋め込み API 失敗時などに全要素 0 が返る）
         $useKnn = !$this->isZeroMagnitudeVector($queryVector);
@@ -146,6 +166,7 @@ class KnowledgeBaseService
         ];
 
         // 1. Elasticsearchのプロミス (Http\Promise\Promise) を取得
+        $tEs = PerfTrace::now();
         $httpPromise = $this->esClient->search($params);
 
         // 2. Guzzleのプロミスを作成してラップする (型エラーの解消)
@@ -155,9 +176,17 @@ class KnowledgeBaseService
 
         // 3. Elasticsearchの処理が終わったら、Guzzleのプロミスに結果を渡す
         $httpPromise->then(
-            function ($response) use ($guzzlePromise) {
+            function ($response) use ($guzzlePromise, $topK, $filterDocType, $useKnn, $tEs) {
                 $res = is_array($response) ? $response : $response->asArray();
                 $totalHits = is_array($res["hits"]["total"]) ? $res["hits"]["total"]["value"] : $res["hits"]["total"];
+                PerfTrace::log('RAG.ElasticsearchSearch', $tEs, [
+                    'index' => self::INDEX_NAME,
+                    'top_k' => $topK,
+                    'hits' => $totalHits,
+                    'use_knn' => $useKnn ? 'yes' : 'no',
+                    'filter_doc_type' => $filterDocType ?? 'none',
+                    'mode' => 'async',
+                ]);
                 
                 if ($totalHits == 0) {
                     $guzzlePromise->resolve(''); // 結果なし
