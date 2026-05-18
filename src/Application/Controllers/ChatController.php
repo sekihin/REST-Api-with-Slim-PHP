@@ -7,10 +7,8 @@ namespace App\Application\Controllers;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use App\Infrastructure\AI\Factories\AgentFactory;
-use App\Infrastructure\AI\Memory\RedisMessageHistory;
 use App\Neuron\Agents\GeneralChatAgent;
 use Psr\Log\LoggerInterface;
-use Redis;
 
 /**
  * チャットコントローラー
@@ -21,24 +19,20 @@ use Redis;
 class ChatController
 {
     private AgentFactory $agentFactory;
-    private Redis $redis;
     private GeneralChatAgent $generalChatAgent;
     private LoggerInterface $logger;
 
     /**
      * コンストラクタ
      * * @param AgentFactory $agentFactory 設定済みのエージェントを生成するファクトリ
-     * * @param Redis        $redis        会話履歴を保存するためのRedisインスタンス
      */
     public function __construct(
         AgentFactory $agentFactory,
-        Redis $redis,
         GeneralChatAgent $generalChatAgent,
         LoggerInterface $logger
     )
     {
         $this->agentFactory = $agentFactory;
-        $this->redis = $redis;
         $this->generalChatAgent = $generalChatAgent;
         $this->logger = $logger;
     }
