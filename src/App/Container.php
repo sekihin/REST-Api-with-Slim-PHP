@@ -347,7 +347,6 @@ $container[AIProviderInterface::class] = function ($c) {
             parameters: [
                 'temperature' => 0.5,
                 'max_tokens' => 2048,
-                'stream' => false,
             ],
             strict_response: false,
             httpClient: null

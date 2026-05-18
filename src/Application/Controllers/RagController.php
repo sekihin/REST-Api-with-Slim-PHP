@@ -6,6 +6,7 @@ namespace App\Application\Controllers;
 
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use App\Infrastructure\AI\Agents\RouterAgent;
 use App\Infrastructure\AI\Factories\AgentFactory;
 use App\Domain\Knowledge\KnowledgeBaseService;
 use App\Domain\Memory\ElasticsearchMemoryService;
@@ -158,6 +159,22 @@ class RagController
                 'knowledge_context_length' => strlen($knowledgeContext),
             ]);
 
+            $wantsStream = str_contains(
+                $request->getHeaderLine('Accept'),
+                'text/event-stream'
+            ) || ($queryParams['stream'] ?? $bodyParams['stream'] ?? null) === '1';
+
+            if ($wantsStream) {
+                PerfTrace::log('RequestTotal', $requestStart, ['endpoint' => 'rag', 'status' => 'stream']);
+                return $this->replyAsStream(
+                    $response,
+                    $agent,
+                    $preprocessedMessage,
+                    $sessionId,
+                    $userId
+                );
+            }
+
             // Step 6 & 7: Chat Node & Tool Node - 応答生成を実行
             $tLlm = PerfTrace::now();
             $result = $agent->reply($preprocessedMessage, $sessionId);
@@ -232,6 +249,47 @@ class RagController
         PerfTrace::log('RequestTotal', $requestStart, ['endpoint' => 'rag', 'status' => 'ok']);
 
         return $jsonResponse;
+    }
+
+    /**
+     * SSEストリームとしてエージェントの返答をクライアントへ流す
+     */
+    private function replyAsStream(
+        Response $response,
+        RouterAgent $agent,
+        string $message,
+        string $sessionId,
+        string $userId
+    ): Response {
+        header('Content-Type: text/event-stream; charset=utf-8');
+        header('Cache-Control: no-cache');
+        header('X-Accel-Buffering: no');
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
+
+        $sendToken = function (string $token): void {
+            echo 'data: ' . json_encode(['token' => $token], JSON_UNESCAPED_UNICODE) . "\n\n";
+            flush();
+        };
+
+        try {
+            $agent->onToken($sendToken);
+            $result = $agent->reply($message, $sessionId);
+            $replyContent = $result->getContent();
+
+            if (isset($this->userMemoryService)) {
+                $this->userMemoryService->add($userId, $message, $replyContent);
+            }
+        } catch (\Throwable $e) {
+            echo 'data: ' . json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE) . "\n\n";
+            flush();
+        }
+
+        echo "data: [DONE]\n\n";
+        flush();
+
+        return $response->withStatus(200);
     }
 
     /**

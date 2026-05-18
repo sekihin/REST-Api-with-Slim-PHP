@@ -55,9 +55,9 @@ class DoubaoProvider
     public function __construct(
         string $apiKey,
         LoggerInterface $logger,
-        string $chatModel = 'doubao-seed-2-0-mini-260215',
+        string $chatModel = 'doubao-1-5-lite-32k-250115',
         float $temperature = 0.7,
-        int $maxTokens = 1024,
+        int $maxTokens = 256,
         int $timeout = 15,
         int $maxRetries = 1
     ) {
@@ -96,64 +96,135 @@ class DoubaoProvider
     }
 
     /**
-     * チャット完了APIを呼び出す
+     * チャット完了APIを呼び出す（ストリーミング対応）
      *
-     * @param array $messages メッセージ配列（role/content）
-     * @param array $tools ツール定義（任意）
-     * @return array 応答メッセージ（role, content, tool_calls）
-     * @throws \RuntimeException APIリクエスト失敗時
+     * @param array $messages
+     * @param array $tools
+     * @param callable|null $onToken fn(string $token): void
+     * @return array ['role'=>…, 'content'=>…, 'tool_calls'=>…]
      */
-    public function chat(array $messages, array $tools = []): array
+    public function chat(array $messages, array $tools = [], ?callable $onToken = null): array
     {
         $tApi = PerfTrace::now();
         $formattedMessages = $this->formatMessagesForDoubao($messages);
 
-        // ペイロード作成：推論を遅らせる 'reasoning_effort' は意図的に除外
         $payload = [
-            'model'            => $this->chatModel,
-            'messages'         => $formattedMessages,
-            'temperature'      => $this->temperature,
-            'max_tokens'       => $this->maxTokens,
-            'stream'           => false,
+            'model'       => $this->chatModel,
+            'messages'    => $formattedMessages,
+            'temperature' => $this->temperature,
+            'max_tokens'  => $this->maxTokens,
+            'stream'      => true,
         ];
 
         if (!empty($tools)) {
-            $payload['tools'] = $tools;
+            $payload['tools']       = $tools;
             $payload['tool_choice'] = 'auto';
         }
 
         try {
-            $response = $this->httpClient->post(self::CHAT_PATH, ['json' => $payload]);
-            $statusCode = $response->getStatusCode();
+            $response = $this->httpClient->post(self::CHAT_PATH, [
+                'json'   => $payload,
+                'stream' => true,
+            ]);
 
-            // エラーレスポンス処理
+            $statusCode = $response->getStatusCode();
             if ($statusCode !== 200) {
-                $errorBody = json_decode((string)$response->getBody(), true) ?: ['error' => 'Unknown error'];
-                $this->logger->error('Doubao chat error', ['status' => $statusCode, 'error' => $errorBody]);
-                throw new \RuntimeException('API request failed');
+                $errorBody = json_decode((string) $response->getBody(), true)
+                           ?: ['error' => 'Unknown error'];
+                throw new \RuntimeException(sprintf(
+                    'Doubao API %d: %s',
+                    $statusCode,
+                    json_encode($errorBody)
+                ));
             }
 
-            $body = json_decode((string)$response->getBody(), true, flags: JSON_THROW_ON_ERROR);
-            $choice = $body['choices'][0]['message'];
-            $usage  = $body['usage'] ?? [];
+            $body        = $response->getBody();
+            $fullContent = '';
+            $toolCalls   = [];
+            $usage       = [];
+            $role        = 'assistant';
+            $lineBuffer  = '';
 
-            // パフォーマンス計測：トークン使用量を記録
+            while (!$body->eof()) {
+                $chunk      = $body->read(512);
+                $lineBuffer .= $chunk;
+
+                while (($pos = strpos($lineBuffer, "\n")) !== false) {
+                    $line       = substr($lineBuffer, 0, $pos);
+                    $lineBuffer = substr($lineBuffer, $pos + 1);
+                    $line       = rtrim($line, "\r");
+
+                    if (!str_starts_with($line, 'data:')) {
+                        continue;
+                    }
+                    $raw = ltrim(substr($line, 5));
+
+                    if ($raw === '[DONE]') {
+                        break 2;
+                    }
+
+                    $chunk = json_decode($raw, true);
+                    if (!is_array($chunk)) {
+                        continue;
+                    }
+
+                    if (isset($chunk['usage'])) {
+                        $usage = $chunk['usage'];
+                    }
+
+                    $delta = $chunk['choices'][0]['delta'] ?? [];
+                    if (isset($delta['role'])) {
+                        $role = $delta['role'];
+                    }
+
+                    $token = $delta['content'] ?? null;
+                    if ($token !== null && $token !== '') {
+                        $fullContent .= $token;
+                        if ($onToken !== null) {
+                            $onToken($token);
+                        }
+                    }
+
+                    if (!empty($delta['tool_calls'])) {
+                        foreach ($delta['tool_calls'] as $tc) {
+                            $idx = $tc['index'] ?? 0;
+                            if (!isset($toolCalls[$idx])) {
+                                $toolCalls[$idx] = [
+                                    'id'       => $tc['id'] ?? '',
+                                    'type'     => $tc['type'] ?? 'function',
+                                    'function' => ['name' => '', 'arguments' => ''],
+                                ];
+                            }
+                            $toolCalls[$idx]['function']['name']
+                                .= $tc['function']['name'] ?? '';
+                            $toolCalls[$idx]['function']['arguments']
+                                .= $tc['function']['arguments'] ?? '';
+                        }
+                    }
+                }
+            }
+
+            $this->logger->info('Doubao Usage', $usage);
             PerfTrace::log('LLM.DoubaoChat', $tApi, [
-                'model' => $this->chatModel,
-                'prompt_tokens' => $usage['prompt_tokens'] ?? 0,
+                'model'             => $this->chatModel,
+                'msg_count'         => count($messages),
+                'has_tools'         => !empty($tools) ? 'yes' : 'no',
+                'prompt_tokens'     => $usage['prompt_tokens'] ?? 0,
                 'completion_tokens' => $usage['completion_tokens'] ?? 0,
             ]);
 
             return [
-                'role'       => $choice['role'] ?? 'assistant',
-                'content'    => $choice['content'] ?? null,
-                'tool_calls' => $choice['tool_calls'] ?? [],
+                'role'       => $role,
+                'content'    => $fullContent ?: null,
+                'tool_calls' => array_values($toolCalls),
             ];
-
         } catch (GuzzleException | \JsonException $e) {
-            PerfTrace::log('LLM.DoubaoChat', $tApi, ['status' => 'error']);
+            PerfTrace::log('LLM.DoubaoChat', $tApi, [
+                'status' => 'error',
+                'error'  => $e->getMessage(),
+            ]);
             $this->logger->error('Doubao chat failed', ['error' => $e->getMessage()]);
-            throw new \RuntimeException('Doubao request failed', 0, $e);
+            throw new \RuntimeException('Doubao chat request failed', 0, $e);
         }
     }
 
@@ -167,7 +238,9 @@ class DoubaoProvider
     {
         $tApi = PerfTrace::now();
         $text = trim($text);
-        if ($text === '') return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        if ($text === '') {
+            return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        }
 
         try {
             $payload = [
@@ -176,26 +249,40 @@ class DoubaoProvider
             ];
 
             $response = $this->httpClient->post(self::EMBEDDING_PATH, ['json' => $payload]);
+            
             if ($response->getStatusCode() !== 200) {
-                $this->logger->error('Doubao embedding error', ['status' => $response->getStatusCode()]);
+                $error = json_decode((string)$response->getBody(), true) ?: ['error' => 'HTTP error'];
+                $this->logger->error('Doubao embedding HTTP error', [
+                    'status' => $response->getStatusCode(),
+                    'error'  => $error,
+                ]);
                 return array_fill(0, self::EMBEDDING_DIM, 0.0);
             }
 
-            $data = json_decode((string)$response->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            $data = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
             $embedding = $data['data'][0]['embedding'] ?? [];
             $len = count($embedding);
 
-            PerfTrace::log('Embedding.Doubao', $tApi, ['text_len' => strlen($text), 'dims' => $len]);
+            PerfTrace::log('Embedding.Doubao', $tApi, [
+                'text_length' => strlen($text),
+                'vector_dims' => $len,
+            ]);
 
-            // 次元数が2048になるよう調整（切り詰め or 0埋め）
-            return match(true) {
-                $len === self::EMBEDDING_DIM => $embedding,
-                $len > self::EMBEDDING_DIM => array_slice($embedding, 0, self::EMBEDDING_DIM),
-                default => array_merge($embedding, array_fill(0, self::EMBEDDING_DIM - $len, 0.0))
-            };
+            if ($len === self::EMBEDDING_DIM) {
+                return $embedding;
+            }
+
+            if ($len > self::EMBEDDING_DIM) {
+                return array_slice($embedding, 0, self::EMBEDDING_DIM);
+            }
+
+            return array_merge($embedding, array_fill(0, self::EMBEDDING_DIM - $len, 0.0));
 
         } catch (\Throwable $e) {
-            $this->logger->error('Doubao embedding failed', ['error' => $e->getMessage()]);
+            PerfTrace::log('Embedding.Doubao', $tApi, ['status' => 'error', 'text_length' => strlen($text)]);
+            $this->logger->error('Doubao embedding failed', [
+                'error'       => $e->getMessage(),
+            ]);
             return array_fill(0, self::EMBEDDING_DIM, 0.0);
         }
     }
@@ -211,14 +298,28 @@ class DoubaoProvider
     private function formatMessagesForDoubao(array $messages): array
     {
         $formatted = [];
+        
         foreach ($messages as $msg) {
-            $formatted[] = [
-                'role' => $msg['role'] ?? 'user',
-                'content' => is_string($msg['content'] ?? '')
-                    ? [['type' => 'text', 'text' => $msg['content']]]
-                    : $msg['content']
+            $formattedMsg = [
+                'role' => $msg['role'] ?? 'user'
             ];
+            
+            if (isset($msg['content'])) {
+                if (is_string($msg['content'])) {
+                    $formattedMsg['content'] = [
+                        [
+                            'type' => 'text',
+                            'text' => $msg['content']
+                        ]
+                    ];
+                } else {
+                    $formattedMsg['content'] = $msg['content'];
+                }
+            }
+            
+            $formatted[] = $formattedMsg;
         }
+        
         return $formatted;
     }
 }

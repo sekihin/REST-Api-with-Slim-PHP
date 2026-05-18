@@ -6,7 +6,9 @@ namespace App\Infrastructure\AI\Agents;
 
 use NeuronAI\Agent\Agent;
 use NeuronAI\Providers\AIProviderInterface;
+use NeuronAI\Agent\AgentHandler;
 use NeuronAI\Chat\Messages\Message;
+use NeuronAI\Chat\Messages\Stream\Chunks\TextChunk;
 use NeuronAI\Chat\Messages\UserMessage;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
@@ -29,6 +31,17 @@ class RouterAgent extends Agent
      * 管理者用ツールを呼び出さないように、ホワイトリスト方式で制限します。
      */
     private array $allowedTools;
+
+    /** @var callable|null */
+    private $tokenCallback = null;
+
+    /**
+     * ストリーミング時にトークンが届くたびに呼ばれるコールバックを登録
+     */
+    public function onToken(callable $cb): void
+    {
+        $this->tokenCallback = $cb;
+    }
 
     /**
      * コンストラクタ
@@ -82,7 +95,10 @@ class RouterAgent extends Agent
         // セッションIDがない場合は、単発のメッセージとして処理
         if (!$sessionId) {
             $tChat = PerfTrace::now();
-            $message = $this->chat([new UserMessage($userMessage)])->getMessage();
+            $handler = $this->tokenCallback !== null
+                ? $this->stream([new UserMessage($userMessage)])
+                : $this->chat([new UserMessage($userMessage)]);
+            $message = $this->resolveHandlerMessage($handler);
             PerfTrace::log('Agent.Chat', $tChat, [
                 'session_id' => 'none',
                 'message_length' => strlen($userMessage),
@@ -104,7 +120,10 @@ class RouterAgent extends Agent
 
         // 3. エージェントに過去の文脈ごと渡して回答を生成
         $tChat = PerfTrace::now();
-        $response = $this->chat($messages)->getMessage();
+        $handler = $this->tokenCallback !== null
+            ? $this->stream($messages)
+            : $this->chat($messages);
+        $response = $this->resolveHandlerMessage($handler);
         PerfTrace::log('Agent.Chat', $tChat, [
             'session_id' => $sessionId,
             'message_length' => strlen($userMessage),
@@ -119,6 +138,19 @@ class RouterAgent extends Agent
         PerfTrace::log('Agent.RedisHistorySave', $tHistorySave, ['session_id' => $sessionId]);
 
         return $response;
+    }
+
+    private function resolveHandlerMessage(AgentHandler $handler): Message
+    {
+        if ($this->tokenCallback !== null) {
+            foreach ($handler->events() as $event) {
+                if ($event instanceof TextChunk) {
+                    ($this->tokenCallback)($event->content);
+                }
+            }
+        }
+
+        return $handler->getMessage();
     }
 
     /**
