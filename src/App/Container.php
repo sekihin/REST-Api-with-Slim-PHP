@@ -45,11 +45,13 @@ use App\Application\Controllers\OrderController;
 use App\Application\Controllers\InventoryController;
 use App\Neuron\Agents\GeneralChatAgent;
 use NeuronAI\Providers\AIProviderInterface;
-use NeuronAI\Providers\OpenAILike;
 use Elastic\Elasticsearch\ClientBuilder;
 use Psr\Log\LoggerInterface;
 use Monolog\Logger; 
 use Monolog\Handler\StreamHandler;
+use App\Common\Tracing\TracerInterface;
+use App\Common\Tracing\NullTracer;
+use Redis;
 
 // Pimpleコンテナの初期化
 $container = new Container();
@@ -102,6 +104,11 @@ $container[LoggerInterface::class] = function ($c) {
     // 必要であれば、重大なエラーのみSlack通知やメール送信するハンドラーもここに追加できます。
     
     return $logger;
+};
+
+// TracerInterface のデフォルトバインディング
+$container[TracerInterface::class] = function ($c) {
+    return new NullTracer();
 };
 
 // --- 3. データベース接続 (PDO) ---
@@ -313,7 +320,7 @@ $container[AIProviderInterface::class] = function ($c) {
             // 推奨モデル: 'gemini-1.5-flash'
             // 理由: 非常に高速かつ低コストで、ツール呼び出し（Function Calling）の精度も高いため、
             // リアルタイム性が求められるチャットボットやエージェントに最適です。
-            model: 'gemini-1.5-flash', 
+            chatModel: 'gemini-1.5-flash', 
             // 温度 (Temperature): 0.3
             // 創造性を少し残しつつも、事実に基づいた回答を安定して出力させるための設定です。
             temperature: 0.3
@@ -336,20 +343,15 @@ $container[AIProviderInterface::class] = function ($c) {
 
     // ケースC: Doubao (豆包) を使用する場合
     if ($provider === 'doubao') {
-        $apiKey = getenv('DOBAO_API_KEY') ?: throw new \Exception('Missing DOBAO_API_KEY');
+        // FIX-1: タイポ修正 DOBAO → DOUBAO
+        $apiKey = getenv('DOUBAO_API_KEY')
+            ?: throw new \Exception('Missing DOUBAO_API_KEY');
 
-        // Volcengine Ark の OpenAI 互換エンドポイントに接続（/api/v3/chat/completions）
-        // NeuronAI は OpenAI互換の Provider を想定しているため、OpenAILike を使う
-        return new OpenAILike(
-            baseUri: 'https://ark.cn-beijing.volces.com/api/v3',
-            key: $apiKey,
-            model: getenv('DOUBAO_CHAT_MODEL') ?: 'doubao-seed-2-0-mini-260215',
-            parameters: [
-                'temperature' => 0.5,
-                'max_tokens' => 2048,
-            ],
-            strict_response: false,
-            httpClient: null
+        return new DoubaoProvider(
+            apiKey:         $apiKey,
+            logger:         $c->get(\Psr\Log\LoggerInterface::class),
+            temperature:    0.5,
+            maxTokens:      2048
         );
     }
 
@@ -397,13 +399,13 @@ $container[AgentFactory::class] = function ($c) {
 };
 
 // Redis接続（php-redis 拡張が必要。未導入時は /api/chat 利用時にエラーになります）
-$container[\Redis::class] = function ($c) {
-    if (!class_exists(\Redis::class, false)) {
+$container[Redis::class] = function ($c) {
+    if (!class_exists(Redis::class, false)) {
         throw new \RuntimeException(
             'PHP Redis extension is required for chat history. Install php-redis and enable extension=redis in php.ini.'
         );
     }
-    $redis = new \Redis();
+    $redis = new Redis();
     $redisHost = getenv('REDIS_HOST') ?: 'localhost';
     $redisPort = (int)(getenv('REDIS_PORT') ?: 6379);
     $redis->connect($redisHost, $redisPort);
