@@ -9,6 +9,7 @@ use GuzzleHttp\Promise\Promise as GuzzlePromise;
 use Elastic\Elasticsearch\Client as ElasticsearchClient;
 use App\Common\PerfTrace;
 use App\Domain\Knowledge\EmbeddingProviderInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * Elasticsearch を使用したユーザー記憶（Vector DB）管理サービス
@@ -24,7 +25,8 @@ class ElasticsearchMemoryService
 
     public function __construct(
         private ElasticsearchClient $esClient,
-        private EmbeddingProviderInterface $embeddingProvider
+        private EmbeddingProviderInterface $embeddingProvider,
+        private LoggerInterface $logger,
     ) {
     }
 
@@ -132,7 +134,7 @@ class ElasticsearchMemoryService
 
         } catch (\Throwable $e) {
             // エラー時はフォールバックとして空文字を返す
-            \Illuminate\Support\Facades\Log::error('ES Memory Search Error: ' . $e->getMessage());
+            $this->logger->error('ES Memory Search Error: ' . $e->getMessage());
             return '';
         }
     }
@@ -190,7 +192,7 @@ class ElasticsearchMemoryService
                 $guzzlePromise->resolve(implode("\n", $facts));
             },
             function ($exception) use ($guzzlePromise) {
-                \Illuminate\Support\Facades\Log::error('ES Async Memory Search Error: ' . $exception->getMessage());
+                $this->logger->error('ES Async Memory Search Error: ' . $exception->getMessage());
                 // エラー時は処理を止めず、空文字として解決させる（フォールバック）
                 $guzzlePromise->resolve('');
             }

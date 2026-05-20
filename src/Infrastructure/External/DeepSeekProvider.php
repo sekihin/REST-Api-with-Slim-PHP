@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\External;
 
-use App\Common\PerfTrace;
+use App\Common\Tracing\TracerInterface;
+use App\Common\Tracing\NullTracer;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use NeuronAI\Providers\AIProviderInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
@@ -20,7 +21,7 @@ use Psr\Log\LoggerInterface;
  * * DeepSeekのAPIインターフェースはOpenAIと互換性がありますが、Base URLや推奨パラメータが異なります。
  * * 低コストかつ高性能な推論エンジンとして、システムに統合されます。
  */
-class DeepSeekProvider implements AIProviderInterface
+class DeepSeekProvider 
 {
     /** @var Client HTTPクライアント (Guzzle) */
     private Client $httpClient;
@@ -31,6 +32,7 @@ class DeepSeekProvider implements AIProviderInterface
     private int $timeout;
     private int $maxRetries;
     private LoggerInterface $logger;
+    private TracerInterface $tracer;
 
     /** @var string DeepSeek APIのエンドポイント */
     private const BASE_URI = 'https://api.deepseek.com';
@@ -48,6 +50,7 @@ class DeepSeekProvider implements AIProviderInterface
     public function __construct(
         string $apiKey,
         LoggerInterface $logger,
+        ?TracerInterface $tracer      = null,
         string $model = 'deepseek-chat',
         float $temperature = 0.6,
         int $maxTokens = 4096,
@@ -59,6 +62,7 @@ class DeepSeekProvider implements AIProviderInterface
         $this->temperature = $temperature;
         $this->maxTokens = $maxTokens;
         $this->logger = $logger;
+        $this->tracer = $tracer ?? new NullTracer();
         $this->timeout = $timeout;
         $this->maxRetries = $maxRetries;
 
@@ -101,7 +105,7 @@ class DeepSeekProvider implements AIProviderInterface
      */
     public function chat(array $messages, array $tools = []): array
     {
-        $tApi = PerfTrace::now();
+        $tApi = $this->tracer->now();
         // リクエストペイロードの構築
         $payload = [
             'model'       => $this->model,
@@ -149,7 +153,7 @@ class DeepSeekProvider implements AIProviderInterface
                 $this->logger->info('DeepSeek Token Usage', $usage);
             }
 
-            PerfTrace::log('LLM.DeepSeekChat', $tApi, [
+            $this->tracer->log('LLM.DeepSeekChat', $tApi, [
                 'model' => $this->model,
                 'msg_count' => count($messages),
                 'has_tools' => !empty($tools) ? 'yes' : 'no',
@@ -164,7 +168,7 @@ class DeepSeekProvider implements AIProviderInterface
             ];
 
         } catch (GuzzleException | \JsonException $e) {
-            PerfTrace::log('LLM.DeepSeekChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
+            $this->tracer->log('LLM.DeepSeekChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
             $this->logger->error('DeepSeek chat failed', ['error' => $e->getMessage()]);
             throw new \RuntimeException('DeepSeek request failed', 0, $e);
         }

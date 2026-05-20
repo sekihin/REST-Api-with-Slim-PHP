@@ -193,6 +193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .limit-message .counter { font-weight:bold; color:#007bff; }
 
         /* ── typing dots (used inside the bot bubble) ── */
+        #typingIndicator .chat-avatar { margin-top: 0; }
         .typing-dot {
             display: inline-block;
             width: 6px; height: 6px;
@@ -333,8 +334,8 @@ $(function () {
                             <span class="typing-dot"></span>
                             <span class="typing-dot"></span>
                             <span class="typing-dot"></span>
+                            <span>考え中…</span>
                         </span>
-                        考え中…
                     </div>
                 </div>
             </div>

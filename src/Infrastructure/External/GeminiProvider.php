@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\External;
 
-use App\Common\PerfTrace;
+use App\Common\Tracing\TracerInterface;
+use App\Common\Tracing\NullTracer;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
-use NeuronAI\Providers\AIProviderInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
@@ -23,7 +24,7 @@ use Psr\Log\LoggerInterface;
  * NeuronAIのAIProviderInterfaceを実装しつつ、RAG用途のembeddingsも提供。
  * 公式Geminiプロバイダーが要件を満たさない場合のカスタム実装として使用。
  */
-class GeminiProvider implements AIProviderInterface
+class GeminiProvider
 {
     private Client $httpClient;
     private string $apiKey;
@@ -32,6 +33,7 @@ class GeminiProvider implements AIProviderInterface
     private int $timeout;
     private int $maxRetries;
     private LoggerInterface $logger;
+    private TracerInterface $tracer;
 
     private const CHAT_BASE_URI    = 'https://generativelanguage.googleapis.com/v1beta/models/';
     private const EMBEDDING_PATH   = '/v1beta/models/embedding-001:embedContent';
@@ -49,6 +51,7 @@ class GeminiProvider implements AIProviderInterface
     public function __construct(
         string $apiKey,
         LoggerInterface $logger,
+        ?TracerInterface $tracer      = null,
         string $chatModel = 'gemini-1.5-flash',
         float $temperature = 0.5,
         int $timeout = 60,
@@ -57,6 +60,7 @@ class GeminiProvider implements AIProviderInterface
         $this->apiKey     = $apiKey;
         $this->chatModel  = $chatModel;
         $this->logger     = $logger;
+        $this->tracer         = $tracer ?? new NullTracer();
         $this->temperature = $temperature;
         $this->timeout    = $timeout;
         $this->maxRetries = $maxRetries;
@@ -95,20 +99,31 @@ class GeminiProvider implements AIProviderInterface
 
     /**
      * チャットリクエストの送信
-     * * OpenAI形式の履歴を受け取り、Gemini形式に変換して送信します。
+     * 
+     * NeuronAI\Providers\AIProviderInterface::chat() と互換性を持たせるためのシグネチャ修正
+     * @param array $messages メッセージ履歴
+     * @param array $tools 許可ツール
+     * @return array{role: string, content: string|null, tool_calls: array}
      */
-    public function chat(array $messages, array $tools = []): array
+    public function chat(array $messages, array $tools = [], ?callable $onToken = null): array
     {
-        $tApi = PerfTrace::now();
+        // 内部のロジック（システムプロンプト分離、ペイロード構築、API通信など）はそのまま変更ありません
+        $tApi = $this->tracer->now();
+        
         // 1. システムプロンプトの分離
         // OpenAIは messages 配列に 'role': 'system' を含めますが、
-        // Geminiは独立したフィールド `system_instruction` として扱う必要があります。
+        // Geminiは独立したフィールド `system_instruction` として扱う必要があります
         $systemInstruction = null;
         $geminiContents = [];
 
         foreach ($messages as $msg) {
-            if ($msg['role'] === 'system') {
-                $systemInstruction = ['parts' => ['text' => $msg['content']]];
+            // NeuronAIから渡される各メッセージがオブジェクト（Message等）の場合や、
+            // 配列にキャストできるかによって調整。標準的な配列 ['role' => ..., 'content' => ...] 想定
+            $role = $msg['role'] ?? 'user';
+            $content = $msg['content'] ?? '';
+
+            if ($role === 'system') {
+                $systemInstruction = ['parts' => ['text' => $content]];
             } else {
                 $geminiContents[] = $this->formatMessage($msg);
             }
@@ -123,22 +138,21 @@ class GeminiProvider implements AIProviderInterface
             'contents' => $geminiContents,
             'generationConfig' => [
                 'temperature' => $this->temperature,
-        // Geminiには max_tokens パラメータは必須ではありません（強制的に切りたい場合のみ指定）
+            // Geminiには max_tokens パラメータは必須ではありません（強制的に切りたい場合のみ指定）
             ],
         ];
 
-    // システムプロンプトがあれば追加
+        // システムプロンプトがあれば追加
         if ($systemInstruction) {
             $payload['system_instruction'] = $systemInstruction;
         }
 
-    // ツールがあれば追加 (Geminiは tools 配列の中に function_declarations をラップする構造)
+        // ツールがあれば追加 (Geminiは tools 配列の中に function_declarations をラップする構造)
         if (!empty($geminiTools)) {
             $payload['tools'] = [$geminiTools];
         }
 
         try {
-
             // 4. APIリクエスト送信
             // エンドポイント形式: models/{model}:generateContent
             $response = $this->httpClient->post(self::CHAT_BASE_URI . "{$this->chatModel}:generateContent", [
@@ -146,19 +160,20 @@ class GeminiProvider implements AIProviderInterface
                 'json'    => $payload,
             ]);
 
-        // レスポンスボディの取得とJSONデコード
+            // レスポンスボディの取得とJSONデコード
             $body = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-
             $parsed = $this->parseResponse($body);
-            PerfTrace::log('LLM.GeminiChat', $tApi, [
+
+            $this->tracer->log('LLM.GeminiChat', $tApi, [
                 'model' => $this->chatModel,
                 'msg_count' => count($messages),
                 'has_tools' => !empty($tools) ? 'yes' : 'no',
             ]);
+
             return $parsed;
         } catch (GuzzleException | \JsonException $e) {
-            PerfTrace::log('LLM.GeminiChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
-        // Googleの詳細なエラー情報を取得してログに残す
+            $this->tracer->log('LLM.GeminiChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
+            // Googleの詳細なエラー情報を取得してログに残す
             $this->logger->error('Gemini chat request failed', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Gemini chat failed', 0, $e);
         }
@@ -185,7 +200,7 @@ class GeminiProvider implements AIProviderInterface
                 $parts[] = [
                     'functionCall' => [
                         'name' => $call['function']['name'],
-                        'args' => json_decode($call['function']['arguments'], true) ?? [
+                        'args' => json_decode($call['function']['arguments'], true) ?? []
                     ]
                 ];
             }

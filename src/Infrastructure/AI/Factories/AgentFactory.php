@@ -10,6 +10,7 @@ use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
 use App\Infrastructure\AI\Tools\GetInstallerTool;
+use App\Common\Tracing\TracerInterface;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -47,13 +48,13 @@ class AgentFactory
         $searchFaqTool = $this->container->get(SearchFaqTool::class);
         $GetInstallerTool = $this->container->get(GetInstallerTool::class);
 
-        // RouterAgentをインスタンス化
         return new RouterAgent(
             $llm,
             $lookupOrderTool,
             $checkDeliveryTool,
             $searchFaqTool,
-            $GetInstallerTool
+            $GetInstallerTool,
+            tracer: $this->container->get(TracerInterface::class),
         );
     }
 }

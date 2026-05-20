@@ -13,7 +13,8 @@ use NeuronAI\Chat\Messages\UserMessage;
 use App\Infrastructure\AI\Tools\LookupOrderTool;
 use App\Infrastructure\AI\Tools\CheckDeliveryTool;
 use App\Infrastructure\AI\Tools\SearchFaqTool;
-use App\Common\PerfTrace;
+use App\Common\Tracing\TracerInterface;
+use App\Common\Tracing\NullTracer;
 use App\Infrastructure\AI\Tools\GetInstallerTool;
 use App\Neuron\Agents\History\RedisChatHistory;
 use Redis;
@@ -34,6 +35,8 @@ class RouterAgent extends Agent
 
     /** @var callable|null */
     private $tokenCallback = null;
+
+    private TracerInterface $tracer;
 
     /**
      * ストリーミング時にトークンが届くたびに呼ばれるコールバックを登録
@@ -57,7 +60,8 @@ class RouterAgent extends Agent
         LookupOrderTool $lookupOrderTool,
         CheckDeliveryTool $checkDeliveryTool,
         SearchFaqTool $searchFaqTool,
-        GetInstallerTool $GetInstallerTool // 追加
+        GetInstallerTool $GetInstallerTool,
+        ?TracerInterface $tracer      = null
     ) {
         // NeuronAI\Agent\Agent は Workflow を継承しており、親コンストラクタで workflowId 等が初期化される。
         // これを呼ばないと Typed property Workflow::$workflowId の未初期化エラーになる。
@@ -74,6 +78,7 @@ class RouterAgent extends Agent
         $this->addTool($this->allowedTools);
         $this->basePrompt = $this->buildSystemPrompt();
         $this->setInstructions($this->basePrompt);
+        $this->tracer = $tracer ?? new NullTracer();
     }
 
     /**
@@ -94,12 +99,12 @@ class RouterAgent extends Agent
 
         // セッションIDがない場合は、単発のメッセージとして処理
         if (!$sessionId) {
-            $tChat = PerfTrace::now();
+            $tChat = $this->tracer->now();
             $handler = $this->tokenCallback !== null
                 ? $this->stream([new UserMessage($userMessage)])
                 : $this->chat([new UserMessage($userMessage)]);
             $message = $this->resolveHandlerMessage($handler);
-            PerfTrace::log('Agent.Chat', $tChat, [
+            $this->tracer->log('Agent.Chat', $tChat, [
                 'session_id' => 'none',
                 'message_length' => strlen($userMessage),
             ]);
@@ -107,10 +112,10 @@ class RouterAgent extends Agent
         }
 
         // 1. Redisから過去のメッセージ配列を取得
-        $tHistoryLoad = PerfTrace::now();
+        $tHistoryLoad = $this->tracer->now();
         $history = $this->chatHistoryForSession($sessionId);
         $messages = $history->getMessages();
-        PerfTrace::log('Agent.RedisHistoryLoad', $tHistoryLoad, [
+        $this->tracer->log('Agent.RedisHistoryLoad', $tHistoryLoad, [
             'session_id' => $sessionId,
             'history_count' => count($messages),
         ]);
@@ -119,12 +124,12 @@ class RouterAgent extends Agent
         $messages[] = new UserMessage($userMessage);
 
         // 3. エージェントに過去の文脈ごと渡して回答を生成
-        $tChat = PerfTrace::now();
+        $tChat = $this->tracer->now();
         $handler = $this->tokenCallback !== null
             ? $this->stream($messages)
             : $this->chat($messages);
         $response = $this->resolveHandlerMessage($handler);
-        PerfTrace::log('Agent.Chat', $tChat, [
+        $this->tracer->log('Agent.Chat', $tChat, [
             'session_id' => $sessionId,
             'message_length' => strlen($userMessage),
             'history_count' => count($messages),
@@ -132,10 +137,10 @@ class RouterAgent extends Agent
         ]);
 
         // 4. 今回のやり取りをRedisに保存 (次回以降の文脈のため)
-        $tHistorySave = PerfTrace::now();
+        $tHistorySave = $this->tracer->now();
         $history->addUserMessage($userMessage);
         $history->addAssistantMessage($response->getContent());
-        PerfTrace::log('Agent.RedisHistorySave', $tHistorySave, ['session_id' => $sessionId]);
+        $this->tracer->log('Agent.RedisHistorySave', $tHistorySave, ['session_id' => $sessionId]);
 
         return $response;
     }
