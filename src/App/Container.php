@@ -34,8 +34,6 @@ use App\Infrastructure\AI\Tools\SearchInstallerTool;
 use App\Infrastructure\AI\Agents\GetInstallerAgent;
 use App\Workflows\GetInstaller\GetInstallerWorkflow;
 use App\Workflows\GetInstaller\Nodes\ProcessInstallerQueryNode;
-use App\Infrastructure\External\GeminiProvider;
-use App\Infrastructure\External\DeepSeekProvider;
 use App\Infrastructure\External\DoubaoProvider;
 use App\Infrastructure\External\DoubaoEmbeddingProvider;
 use App\Infrastructure\External\GeminiEmbeddingProvider;
@@ -45,12 +43,13 @@ use App\Application\Controllers\OrderController;
 use App\Application\Controllers\InventoryController;
 use App\Neuron\Agents\GeneralChatAgent;
 use NeuronAI\Providers\AIProviderInterface;
+use App\Infrastructure\External\TracedDoubaoProvider;
 use Elastic\Elasticsearch\ClientBuilder;
 use Psr\Log\LoggerInterface;
 use Monolog\Logger; 
 use Monolog\Handler\StreamHandler;
 use App\Common\Tracing\TracerInterface;
-use App\Common\Tracing\NullTracer;
+use App\Common\Tracing\PerfTraceTracer;
 use Redis;
 
 // Pimpleコンテナの初期化
@@ -106,9 +105,9 @@ $container[LoggerInterface::class] = function ($c) {
     return $logger;
 };
 
-// TracerInterface のデフォルトバインディング
+// TracerInterface のデフォルトバインディング（本番パフォーマンス計測）
 $container[TracerInterface::class] = function ($c) {
-    return new NullTracer();
+    return new PerfTraceTracer();
 };
 
 // --- 3. データベース接続 (PDO) ---
@@ -250,6 +249,30 @@ $container[\Elastic\Elasticsearch\Client::class] = function ($c) {
         ->build();
 };
 
+// Doubao HTTP クライアント（Embedding / 直接 API、PerfTrace 注入）
+$container[DoubaoProvider::class] = function ($c) {
+    $apiKey = getenv('DOUBAO_API_KEY')
+        ?: throw new \Exception('Missing DOUBAO_API_KEY');
+
+    $baseUri = rtrim(getenv('DOUBAO_BASE_URI') ?: DoubaoProvider::DEFAULT_BASE_URI, '/');
+
+    return new DoubaoProvider(
+        apiKey:         $apiKey,
+        logger:         $c[LoggerInterface::class],
+        tracer:         $c[TracerInterface::class],
+        chatModel:      getenv('DOUBAO_CHAT_MODEL') ?: DoubaoProvider::DEFAULT_CHAT_MODEL,
+        embeddingModel: getenv('DOUBAO_EMBEDDING_MODEL') ?: DoubaoProvider::DEFAULT_EMBEDDING_MODEL,
+        embeddingDim:   getenv('DOUBAO_EMBEDDING_DIM') !== false
+            ? (int) getenv('DOUBAO_EMBEDDING_DIM')
+            : DoubaoProvider::DEFAULT_EMBEDDING_DIM,
+        temperature:    0.5,
+        maxTokens:      2048,
+        timeout:        getenv('DOUBAO_TIMEOUT') !== false ? (int) getenv('DOUBAO_TIMEOUT') : 15,
+        maxRetries:     getenv('DOUBAO_MAX_RETRIES') !== false ? (int) getenv('DOUBAO_MAX_RETRIES') : 1,
+        baseUri:        $baseUri,
+    );
+};
+
 //埋込みプロバイダーの動的選択
 $container['embedding_provider'] = function ($c) {
     $embeddingModel = getenv('EMBEDDING_MODEL') ?: 'doubao';
@@ -261,8 +284,7 @@ $container['embedding_provider'] = function ($c) {
         
         case 'doubao':
         default:
-            $apiKey = getenv('DOBAO_API_KEY') ?: throw new \Exception('Missing DOBAO_API_KEY for embedding');
-            return new DoubaoEmbeddingProvider($apiKey, $c[LoggerInterface::class]);
+            return new DoubaoEmbeddingProvider($c[DoubaoProvider::class]);
     }
 };
 
@@ -278,7 +300,8 @@ $container[KnowledgeBaseService::class] = function ($c) {
 $container[ElasticsearchMemoryService::class] = function ($c) {
     return new ElasticsearchMemoryService(
         $c[\Elastic\Elasticsearch\Client::class],
-        $c['embedding_provider']
+        $c['embedding_provider'],
+        $c[LoggerInterface::class]
     );
 };
 
@@ -309,49 +332,47 @@ $container[AIProviderInterface::class] = function ($c) {
     $provider = getenv('LLM_PROVIDER') ?: 'gemini';
 
     // ケースA: Google Gemini を使用する場合
+    // NeuronAI エージェント向けは AIProviderInterface 実装（組み込み Gemini）を使用。
+    // RAG/embeddings 用の App\Infrastructure\External\GeminiProvider は別途バインド。
     if ($provider === 'gemini') {
-        // APIキーの取得と検証 (Fail Fast: キーがない場合は即座に例外を投げて停止)
-        $apiKey = getenv('GEMINI_API_KEY') ?: throw new \Exception('Missing GEMINI_API_KEY 123');
-        
-        return new GeminiProvider(
-            apiKey: $apiKey,
-            // コンテナから共通のロガーを注入（通信ログ記録用）
-            logger: $c[LoggerInterface::class],
-            // 推奨モデル: 'gemini-1.5-flash'
-            // 理由: 非常に高速かつ低コストで、ツール呼び出し（Function Calling）の精度も高いため、
-            // リアルタイム性が求められるチャットボットやエージェントに最適です。
-            chatModel: 'gemini-1.5-flash', 
-            // 温度 (Temperature): 0.3
-            // 創造性を少し残しつつも、事実に基づいた回答を安定して出力させるための設定です。
-            temperature: 0.3
+        $apiKey = getenv('GEMINI_API_KEY') ?: throw new \Exception('Missing GEMINI_API_KEY');
+
+        return new \NeuronAI\Providers\Gemini\Gemini(
+            key: $apiKey,
+            model: getenv('GEMINI_CHAT_MODEL') ?: 'gemini-1.5-flash',
+            parameters: ['temperature' => 0.3],
         );
     }
 
     // ケースB: DeepSeek を使用する場合
     if ($provider === 'deepseek') {
         $apiKey = getenv('DEEPSEEK_API_KEY') ?: throw new \Exception('Missing DEEPSEEK_API_KEY');
-        
-        return new DeepSeekProvider(
-            apiKey: $apiKey,
-            logger: $c[LoggerInterface::class],
-            model: 'deepseek-chat',
-            // DeepSeek provider 側でデフォルト設定 (0.1等) があればそれが適用されますが、
-            // 明示的に指定することも可能です。
-            temperature: 0.1 
+
+        return new \NeuronAI\Providers\Deepseek\Deepseek(
+            key: $apiKey,
+            model: getenv('DEEPSEEK_CHAT_MODEL') ?: 'deepseek-chat',
+            parameters: ['temperature' => 0.1],
         );
     }
 
-    // ケースC: Doubao (豆包) を使用する場合
+    // ケースC: Doubao (豆包) — Volcengine Ark は OpenAI 互換 API
+    // Neuron エージェント向けは OpenAILike。Embedding は DoubaoProvider を別途使用。
     if ($provider === 'doubao') {
-        // FIX-1: タイポ修正 DOBAO → DOUBAO
         $apiKey = getenv('DOUBAO_API_KEY')
             ?: throw new \Exception('Missing DOUBAO_API_KEY');
 
-        return new DoubaoProvider(
-            apiKey:         $apiKey,
-            logger:         $c->get(\Psr\Log\LoggerInterface::class),
-            temperature:    0.5,
-            maxTokens:      2048
+        $baseUri = rtrim(getenv('DOUBAO_BASE_URI') ?: DoubaoProvider::DEFAULT_BASE_URI, '/')
+            . '/api/v3';
+
+        return new TracedDoubaoProvider(
+            baseUri: $baseUri,
+            key: $apiKey,
+            model: getenv('DOUBAO_CHAT_MODEL') ?: DoubaoProvider::DEFAULT_CHAT_MODEL,
+            tracer: $c[TracerInterface::class],
+            parameters: [
+                'temperature' => 0.5,
+                'max_tokens'  => 2048,
+            ],
         );
     }
 
@@ -386,7 +407,8 @@ $container[RouterAgent::class] = function ($c) {
         $c[LookupOrderTool::class],
         $c[CheckDeliveryTool::class],
         $c[SearchFaqTool::class],
-        $c[GetInstallerTool::class]
+        $c[GetInstallerTool::class],
+        tracer:         $c[TracerInterface::class]
     );
 };
 

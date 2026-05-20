@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Infrastructure\External;
 
 use App\Common\PerfTrace;
+use App\Common\Tracing\TracerInterface;
+use App\Common\Tracing\NullTracer;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -20,26 +23,36 @@ use Psr\Log\LoggerInterface;
  * - Text Embeddings 生成（multimodalエンドポイント使用）
  * - パフォーマンス重視の設定（タイムアウト短縮、長接続、リトライ抑制）
  *
- * RAG用途のembeddingsも提供。
- * 公式プロバイダーが要件を満たさない場合のカスタム実装として使用。
+ * Fix log:
+ *  1. `Middleware::retry` decider の修正：4つの引数を正しく受け取るようにし、5xx および `ConnectException` のみリトライするよう変更
+ *  2. SSEストリーム解析を行単位の読み取りに変更し、UTF-8マルチバイト文字の切り捨て（途切れ）問題を解決
+ *  3. `PerfTrace` の密結合を解消 → `TracerInterface` による依存性注入（DI）へ変更（デフォルト実装として `NullTracer` を使用）
+ *  4. `$messages` が空配列の場合、またはテキストが長すぎる場合、いずれも `InvalidArgumentException` をスローするよう変更
+ *  5. 設定項目をすべて外部から渡すようにし、定数はデフォルト値の保持のみとするよう変更
+ *  6. `batchEmbedding()`（一括ベクトル化/エンベディング）と `chatSync()`（非ストリーミングチャット）を新規追加
  */
 class DoubaoProvider
 {
-    private Client $httpClient;
-    private string $apiKey;
-    private string $chatModel;
-    private float $temperature;
-    private int $maxTokens;
-    private int $timeout;
-    private int $maxRetries;
+    private Client          $httpClient;
+    private string          $apiKey;
+    private string          $chatModel;
+    private string          $embeddingModel;
+    private int             $embeddingDim;
+    private float           $temperature;
+    private int             $maxTokens;
+    private int             $timeout;
+    private int             $maxRetries;
     private LoggerInterface $logger;
+    private TracerInterface $tracer;
 
-    // API エンドポイントとモデル定義
-    private const BASE_URI          = 'https://ark.cn-beijing.volces.com';
-    private const CHAT_PATH         = '/api/v3/chat/completions';
-    private const EMBEDDING_PATH    = '/api/v3/embeddings/multimodal';
-    private const EMBEDDING_MODEL   = 'doubao-embedding-vision-250615';
-    private const EMBEDDING_DIM     = 2048;
+    // デフォルト値（外部から上書き可能）
+    public  const DEFAULT_BASE_URI        = 'https://ark.cn-beijing.volces.com';
+    public  const DEFAULT_CHAT_MODEL      = 'doubao-seed-2-0-mini-260428'; //doubao-1-5-lite-32k-250115
+    public  const DEFAULT_EMBEDDING_MODEL = 'doubao-embedding-vision-250615';
+    public  const DEFAULT_EMBEDDING_DIM   = 2048;
+    private const CHAT_PATH               = '/api/v3/chat/completions';
+    private const EMBEDDING_PATH          = '/api/v3/embeddings/multimodal';
+    private const EMBEDDING_MAX_CHARS     = 8000;
 
     /**
      * コンストラクタ
@@ -53,28 +66,46 @@ class DoubaoProvider
      * @param int $maxRetries 最大リトライ回数（1回→遅延削減）
      */
     public function __construct(
-        string $apiKey,
+        string          $apiKey,
         LoggerInterface $logger,
-        string $chatModel = 'doubao-1-5-lite-32k-250115',
-        float $temperature = 0.7,
-        int $maxTokens = 256,
-        int $timeout = 15,
-        int $maxRetries = 1
+        ?TracerInterface $tracer      = null,
+        string          $chatModel    = self::DEFAULT_CHAT_MODEL,
+        string          $embeddingModel = self::DEFAULT_EMBEDDING_MODEL,
+        int             $embeddingDim = self::DEFAULT_EMBEDDING_DIM,
+        float           $temperature  = 0.7,
+        int             $maxTokens    = 256,
+        int             $timeout      = 15,
+        int             $maxRetries   = 1,
+        string          $baseUri      = self::DEFAULT_BASE_URI,
     ) {
-        $this->apiKey      = $apiKey;
-        $this->chatModel   = $chatModel;
-        $this->logger      = $logger;
-        $this->temperature = $temperature;
-        $this->maxTokens   = $maxTokens;
-        $this->timeout     = $timeout;
-        $this->maxRetries  = $maxRetries;
+        $this->apiKey         = $apiKey;
+        $this->logger         = $logger;
+        $this->tracer         = $tracer ?? new NullTracer();
+        $this->chatModel      = $chatModel;
+        $this->embeddingModel = $embeddingModel;
+        $this->embeddingDim   = $embeddingDim;
+        $this->temperature    = $temperature;
+        $this->maxTokens      = $maxTokens;
+        $this->timeout        = $timeout;
+        $this->maxRetries     = $maxRetries;
 
         $handlerStack = HandlerStack::create();
 
         // リトライ処理：最大リトライ回数に従う（遅延300msで簡素化）
         $handlerStack->push(Middleware::retry(
-            function (int $retries): bool {
-                return $retries < $this->maxRetries;
+            function (
+                int                $retries,
+                RequestInterface   $request,
+                ?ResponseInterface $response,
+                ?\Throwable        $exception
+            ): bool {
+                if ($retries >= $this->maxRetries) {
+                    return false;
+                }
+                if ($exception instanceof ConnectException) {
+                    return true;
+                }
+                return $response !== null && $response->getStatusCode() >= 500;
             },
             fn(int $retries): int => 300 // バックオフ500ms→300ms
         ));
@@ -82,7 +113,7 @@ class DoubaoProvider
         // Guzzle クライアント設定：長接続・短い接続タイムアウト・HTTPエラーをスローしない
         $this->httpClient = new Client([
             'handler'         => $handlerStack,
-            'base_uri'        => self::BASE_URI,
+            'base_uri'        => $baseUri,
             'timeout'         => $this->timeout,
             'connect_timeout' => 3,      // 接続タイムアウト 10秒→3秒
             'http_errors'     => false,  // ステータスコードは手動チェック
@@ -95,47 +126,37 @@ class DoubaoProvider
         ]);
     }
 
+    // -------------------------------------------------------------------------
+    // 流式チャット
+    // -------------------------------------------------------------------------
+
     /**
      * チャット完了APIを呼び出す（ストリーミング対応）
      *
-     * @param array $messages
-     * @param array $tools
-     * @param callable|null $onToken fn(string $token): void
-     * @return array ['role'=>…, 'content'=>…, 'tool_calls'=>…]
+     * @param array         $messages  非空メッセージ配列
+     * @param array         $tools     ツール定義（optional）
+     * @param callable|null $onToken   fn(string $token): void
+     * @return array{role: string, content: string|null, tool_calls: array}
+     *
+     * @throws \InvalidArgumentException messages が空の場合
+     * @throws \RuntimeException         APIエラー / ネットワークエラー
      */
     public function chat(array $messages, array $tools = [], ?callable $onToken = null): array
     {
-        $tApi = PerfTrace::now();
-        $formattedMessages = $this->formatMessagesForDoubao($messages);
-
-        $payload = [
-            'model'       => $this->chatModel,
-            'messages'    => $formattedMessages,
-            'temperature' => $this->temperature,
-            'max_tokens'  => $this->maxTokens,
-            'stream'      => true,
-        ];
-
-        if (!empty($tools)) {
-            $payload['tools']       = $tools;
-            $payload['tool_choice'] = 'auto';
+        if (empty($messages)) {
+            throw new \InvalidArgumentException('messages cannot be empty');
         }
 
-        try {
-            $response = $this->httpClient->post(self::CHAT_PATH, [
-                'json'   => $payload,
-                'stream' => true,
-            ]);
+        $tApi    = $this->tracer->now();
+        $payload = $this->buildChatPayload($messages, $tools, stream: true);
 
+        try {
+            $response   = $this->httpClient->post(self::CHAT_PATH, ['json' => $payload, 'stream' => true]);
             $statusCode = $response->getStatusCode();
+            $requestId  = $this->getRequestId($response); // ✅ リクエストID
+
             if ($statusCode !== 200) {
-                $errorBody = json_decode((string) $response->getBody(), true)
-                           ?: ['error' => 'Unknown error'];
-                throw new \RuntimeException(sprintf(
-                    'Doubao API %d: %s',
-                    $statusCode,
-                    json_encode($errorBody)
-                ));
+                $this->throwApiError('Doubao chat', $statusCode, $response, $requestId);
             }
 
             $body        = $response->getBody();
@@ -146,7 +167,7 @@ class DoubaoProvider
             $lineBuffer  = '';
 
             while (!$body->eof()) {
-                $chunk      = $body->read(512);
+                $chunk      = $body->read(8192);
                 $lineBuffer .= $chunk;
 
                 while (($pos = strpos($lineBuffer, "\n")) !== false) {
@@ -163,16 +184,16 @@ class DoubaoProvider
                         break 2;
                     }
 
-                    $chunk = json_decode($raw, true);
-                    if (!is_array($chunk)) {
+                    $event = json_decode($raw, true);
+                    if (!is_array($event)) {
                         continue;
                     }
 
-                    if (isset($chunk['usage'])) {
-                        $usage = $chunk['usage'];
+                    if (isset($event['usage'])) {
+                        $usage = $event['usage'];
                     }
 
-                    $delta = $chunk['choices'][0]['delta'] ?? [];
+                    $delta = $event['choices'][0]['delta'] ?? [];
                     if (isset($delta['role'])) {
                         $role = $delta['role'];
                     }
@@ -195,131 +216,276 @@ class DoubaoProvider
                                     'function' => ['name' => '', 'arguments' => ''],
                                 ];
                             }
-                            $toolCalls[$idx]['function']['name']
-                                .= $tc['function']['name'] ?? '';
-                            $toolCalls[$idx]['function']['arguments']
-                                .= $tc['function']['arguments'] ?? '';
+                            $toolCalls[$idx]['function']['name']      .= $tc['function']['name'] ?? '';
+                            $toolCalls[$idx]['function']['arguments'] .= $tc['function']['arguments'] ?? '';
                         }
                     }
                 }
             }
 
-            $this->logger->info('Doubao Usage', $usage);
-            PerfTrace::log('LLM.DoubaoChat', $tApi, [
+            $this->logger->info('Doubao chat usage', [
+                'request_id' => $requestId,
+                'usage' => $usage
+            ]);
+            $this->tracer->log('LLM.DoubaoChat', $tApi, [
                 'model'             => $this->chatModel,
                 'msg_count'         => count($messages),
                 'has_tools'         => !empty($tools) ? 'yes' : 'no',
                 'prompt_tokens'     => $usage['prompt_tokens'] ?? 0,
                 'completion_tokens' => $usage['completion_tokens'] ?? 0,
+                'request_id'        => $requestId,
+                ...PerfTrace::requestPayloadFields($this->encodeRequestPayload($payload)),
             ]);
 
             return [
                 'role'       => $role,
                 'content'    => $fullContent ?: null,
                 'tool_calls' => array_values($toolCalls),
+                'request_id' => $requestId,  // ✅ リクエストID
             ];
-        } catch (GuzzleException | \JsonException $e) {
-            PerfTrace::log('LLM.DoubaoChat', $tApi, [
-                'status' => 'error',
-                'error'  => $e->getMessage(),
-            ]);
+
+        } catch (GuzzleException $e) {
+            $this->tracer->log('LLM.DoubaoChat', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
             $this->logger->error('Doubao chat failed', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Doubao chat request failed', 0, $e);
         }
     }
 
+    // -------------------------------------------------------------------------
+    // 非流式チャット（NEW）
+    // -------------------------------------------------------------------------
+
     /**
-     * テキストをエンベディング（ベクトル）に変換する
+     * 同期（非ストリーミング）チャット
+     * cron / webhook など、リアルタイム出力不要なシーンに適する。
      *
-     * @param string $text 入力テキスト
-     * @return array 固定次元（2048）のfloat配列。失敗時はゼロベクトル
+     * @param array $messages
+     * @param array $tools
+     * @return array{role: string, content: string|null, tool_calls: array}
      */
-    public function getEmbedding(string $text): array
+    public function chatSync(array $messages, array $tools = []): array
     {
-        $tApi = PerfTrace::now();
-        $text = trim($text);
-        if ($text === '') {
-            return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        if (empty($messages)) {
+            throw new \InvalidArgumentException('messages cannot be empty');
         }
 
+        $tApi    = $this->tracer->now();
+        $payload = $this->buildChatPayload($messages, $tools, stream: false);
+
         try {
-            $payload = [
-                'model' => self::EMBEDDING_MODEL,
-                'input' => [['type' => 'text', 'text' => $text]],
+            $response   = $this->httpClient->post(self::CHAT_PATH, ['json' => $payload]);
+            $statusCode = $response->getStatusCode();
+            $requestId  = $this->getRequestId($response);  // ✅ リクエストID
+
+            if ($statusCode !== 200) {
+                $this->throwApiError('Doubao chatSync', $statusCode, $response, $requestId);
+            }
+
+            $data   = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+            $choice = $data['choices'][0] ?? [];
+            $msg    = $choice['message'] ?? [];
+            $usage  = $data['usage'] ?? [];
+
+            $this->logger->info('Doubao chatSync usage', [
+                'request_id' => $requestId,
+                'usage' => $usage
+            ]);
+            $this->tracer->log('LLM.DoubaoChatSync', $tApi, [
+                'model'             => $this->chatModel,
+                'msg_count'         => count($messages),
+                'prompt_tokens'     => $usage['prompt_tokens'] ?? 0,
+                'completion_tokens' => $usage['completion_tokens'] ?? 0,
+                'request_id'        => $requestId,
+                ...PerfTrace::requestPayloadFields($this->encodeRequestPayload($payload)),
+            ]);
+
+            return [
+                'role'       => $msg['role'] ?? 'assistant',
+                'content'    => $msg['content'] ?? null,
+                'tool_calls' => $msg['tool_calls'] ?? [],
+                'request_id' => $requestId,  // ✅ リクエストID
             ];
 
-            $response = $this->httpClient->post(self::EMBEDDING_PATH, ['json' => $payload]);
-            
-            if ($response->getStatusCode() !== 200) {
-                $error = json_decode((string)$response->getBody(), true) ?: ['error' => 'HTTP error'];
-                $this->logger->error('Doubao embedding HTTP error', [
-                    'status' => $response->getStatusCode(),
-                    'error'  => $error,
-                ]);
-                return array_fill(0, self::EMBEDDING_DIM, 0.0);
-            }
-
-            $data = json_decode((string)$response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-            $embedding = $data['data'][0]['embedding'] ?? [];
-            $len = count($embedding);
-
-            PerfTrace::log('Embedding.Doubao', $tApi, [
-                'text_length' => strlen($text),
-                'vector_dims' => $len,
-            ]);
-
-            if ($len === self::EMBEDDING_DIM) {
-                return $embedding;
-            }
-
-            if ($len > self::EMBEDDING_DIM) {
-                return array_slice($embedding, 0, self::EMBEDDING_DIM);
-            }
-
-            return array_merge($embedding, array_fill(0, self::EMBEDDING_DIM - $len, 0.0));
-
-        } catch (\Throwable $e) {
-            PerfTrace::log('Embedding.Doubao', $tApi, ['status' => 'error', 'text_length' => strlen($text)]);
-            $this->logger->error('Doubao embedding failed', [
-                'error'       => $e->getMessage(),
-            ]);
-            return array_fill(0, self::EMBEDDING_DIM, 0.0);
+        } catch (GuzzleException|\JsonException $e) {
+            $this->tracer->log('LLM.DoubaoChatSync', $tApi, ['status' => 'error', 'error' => $e->getMessage()]);
+            $this->logger->error('Doubao chatSync failed', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('Doubao chatSync request failed', 0, $e);
         }
     }
 
+    // -------------------------------------------------------------------------
+    // １件 Embedding
+    // -------------------------------------------------------------------------
+
     /**
-     * メッセージをDoubao API向けにフォーマット
-     *   - contentが文字列の場合、自動的にテキスト型配列に変換
-     *   - 処理負荷軽減のため簡素化
+     * テキストをエンベディング（ベクトル）に変換する
      *
-     * @param array $messages 元のメッセージ配列
-     * @return array 変換後メッセージ
+     * @param string $text 入力テキスト（自動で最大長にトリミング）
+     * @return float[] 固定次元の float 配列。失敗時はゼロベクトル
      */
+    public function getEmbedding(string $text): array
+    {
+        $tApi = $this->tracer->now();
+        $text = trim($text);
+
+        if ($text === '') {
+            return array_fill(0, $this->embeddingDim, 0.0);
+        }
+
+        if (mb_strlen($text) > self::EMBEDDING_MAX_CHARS) {
+            $text = mb_substr($text, 0, self::EMBEDDING_MAX_CHARS);
+            $this->logger->warning('Doubao embedding: text truncated', ['original_chars' => mb_strlen($text)]);
+        }
+
+        try {
+            $payload  = [
+                'model' => $this->embeddingModel,
+                'input' => [['type' => 'text', 'text' => $text]],
+            ];
+            $response = $this->httpClient->post(self::EMBEDDING_PATH, ['json' => $payload]);
+            $requestId = $this->getRequestId($response);
+
+            if ($response->getStatusCode() !== 200) {
+                $error = json_decode((string) $response->getBody(), true) ?: ['error' => 'Unknown error'];
+                $this->logger->error('Doubao embedding HTTP error', [
+                    'request_id' => $requestId,
+                    'status' => $response->getStatusCode(),
+                    'error'  => $error,
+                ]);
+                return array_fill(0, $this->embeddingDim, 0.0);
+            }
+
+            $data      = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+            $embedding = $data['data'][0]['embedding'] ?? [];
+
+            $vector = $this->normalizeDimension($embedding);
+            $this->tracer->log('Embedding.Doubao', $tApi, [
+                'text_length' => strlen($text),
+                'vector_dims' => count($vector),
+                'request_id'  => $requestId,
+            ]);
+
+            return $vector;
+
+        } catch (\Throwable $e) {
+            $this->tracer->log('Embedding.Doubao', $tApi, ['status' => 'error']);
+            $this->logger->error('Doubao embedding failed', ['error' => $e->getMessage()]);
+            return array_fill(0, $this->embeddingDim, 0.0);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // バッチ Embedding
+    // -------------------------------------------------------------------------
+
+    /**
+     * 複数テキストを一括でエンベディングに変換する（RAG文書インデックス用）
+     *
+     * 個別失敗はゼロベクトルで補填し、他のテキストへの影響を遮断する。
+     *
+     * @param  string[] $texts
+     * @return float[][] $texts と同順の float[][] 配列
+     */
+    public function batchEmbedding(array $texts): array
+    {
+        return array_map(
+            fn(string $text): array => $this->getEmbedding($text),
+            $texts
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // リクエストID 取得
+    // -------------------------------------------------------------------------
+    private function getRequestId(ResponseInterface $response): string
+    {
+        return DoubaoRequestId::fromHeaders($response->getHeaders());
+    }
+
+    // -------------------------------------------------------------------------
+    // プライベートヘルパー
+    // -------------------------------------------------------------------------
+
+    private function encodeRequestPayload(array $payload): string
+    {
+        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $json !== false ? $json : '';
+    }
+
+    private function buildChatPayload(array $messages, array $tools, bool $stream): array
+    {
+        $payload = [
+            'model'       => $this->chatModel,
+            'messages'    => $this->formatMessagesForDoubao($messages),
+            'temperature' => $this->temperature,
+            'max_tokens'  => $this->maxTokens,
+            'stream'      => $stream,
+        ];
+
+        if (!empty($tools)) {
+            $payload['tools']       = $tools;
+            $payload['tool_choice'] = 'auto';
+        }
+
+        return $payload;
+    }
+
+    private function normalizeDimension(array $embedding): array
+    {
+        $len = count($embedding);
+
+        if ($len === $this->embeddingDim) {
+            return $embedding;
+        }
+        if ($len > $this->embeddingDim) {
+            return array_slice($embedding, 0, $this->embeddingDim);
+        }
+        return array_merge($embedding, array_fill(0, $this->embeddingDim - $len, 0.0));
+    }
+
     private function formatMessagesForDoubao(array $messages): array
     {
         $formatted = [];
-        
+
         foreach ($messages as $msg) {
-            $formattedMsg = [
-                'role' => $msg['role'] ?? 'user'
-            ];
-            
+            $formattedMsg = ['role' => $msg['role'] ?? 'user'];
+
             if (isset($msg['content'])) {
-                if (is_string($msg['content'])) {
-                    $formattedMsg['content'] = [
-                        [
-                            'type' => 'text',
-                            'text' => $msg['content']
-                        ]
-                    ];
-                } else {
-                    $formattedMsg['content'] = $msg['content'];
-                }
+                $formattedMsg['content'] = is_string($msg['content'])
+                    ? [['type' => 'text', 'text' => $msg['content']]]
+                    : $msg['content'];
             }
-            
+
             $formatted[] = $formattedMsg;
         }
-        
+
         return $formatted;
+    }
+
+    /**
+     * @throws \RuntimeException
+     */
+    private function throwApiError(
+        string $context,
+        int $status,
+        ResponseInterface $response,
+        string $requestId = 'unknown'
+    ): never {
+        $body = json_decode((string) $response->getBody(), true) ?: ['error' => 'Unknown error'];
+        $this->logger->error("{$context} API error", [
+            'request_id' => $requestId,
+            'status' => $status,
+            'body' => $body
+        ]);
+
+        throw new \RuntimeException(
+            sprintf('%s API %d | request_id=%s: %s',
+                $context,
+                $status,
+                $requestId,
+                json_encode($body, JSON_UNESCAPED_UNICODE)
+            )
+        );
     }
 }
